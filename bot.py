@@ -10,7 +10,7 @@ RSS_LIST = [
     "https://news.yahoo.co.jp/rss/topics/business.xml"
 ]
 
-KEYWORDS = ["AI", "IT", "金融", "投資", "企業", "スタートアップ", "テック"]
+KEYWORDS = ["AI", "IT", "金融", "投資", "企業", "スタートアップ", "テック", "資産"]
 HISTORY_FILE = "posted.json"
 
 
