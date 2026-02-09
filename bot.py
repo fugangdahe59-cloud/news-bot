@@ -23,6 +23,7 @@ def load_history():
                 return set()
     return set()
 
+requests.post(WEBHOOK_URL, json={"content": "テスト投稿成功"})
 
 def save_history(history):
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
