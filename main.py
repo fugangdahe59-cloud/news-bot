@@ -1,6 +1,3 @@
-import os
-print("IT:", os.getenv("WEBHOOK_IT"))
-print("BUS:", os.getenv("WEBHOOK_BUSINESS"))
 import feedparser
 import requests
 import json
@@ -9,8 +6,8 @@ import time
 
 # 環境変数から Webhook URL を読み込む
 WEBHOOKS = {
-    "it": os.getenv("https://discord.com/api/webhooks/1470586856029683874/7MxWa4lqpgTW5__mxD9TwwwLoB89jxjdA_idOsI7hXD4LMz6Rd74HTzfmUk-KJS12RSC"),
-    "business": os.getenv("https://discord.com/api/webhooks/1470362990435110923/iXJBgvElFu0TyrjArHXKc_H3Akf8heu3DIIyDeoNzD-krshd2LMAkZXO-GMhTBLiXydH")
+    "it": os.getenv("https://discord.com/api/webhooks/1470770157617156226/5bjAA3z39qYH5t3BHIUJG0bIrpZBCLtDv7TlCEl_eSi7tT2esf8uGgIdlA0TXxpcmdSf"),
+    "business": os.getenv("https://discord.com/api/webhooks/1470770770329206785/otRtyL8dbJ-zY7wjdA5KdaW_TUZmzpFIhAy0Zvqfj5kAn_5AUlZP_68DrR7pZR9In2Xu")
 }
 
 RSS_FEEDS = {
@@ -42,10 +39,13 @@ def post_news():
     session = requests.Session()
 
     for category, rss in RSS_FEEDS.items():
-        webhook = WEBHOOKS.get(category)
+        # 空白や改行を削除して正確に取得
+        webhook = WEBHOOKS.get(category, "")
+        if webhook:
+            webhook = webhook.strip()
 
         # Webhook が設定されていなければスキップ
-        if not webhook:
+        if webhook == "":
             print(f"{category} Webhook未設定")
             continue
 
