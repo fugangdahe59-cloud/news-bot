@@ -13,11 +13,12 @@ RSS_FEEDS = {
     "business": "https://news.yahoo.co.jp/rss/topics/business.xml"
 }
 
-# 起動中だけ保持する履歴
 posted_links = set()
 
 
 def post_news():
+    print("ニュース取得開始")
+
     session = requests.Session()
 
     for category, rss in RSS_FEEDS.items():
@@ -25,6 +26,7 @@ def post_news():
         webhook = WEBHOOKS.get(category)
 
         if not webhook:
+            print(f"{category} Webhook未設定")
             continue
 
         for entry in feed.entries:
@@ -39,8 +41,10 @@ def post_news():
             try:
                 r = session.post(webhook, json={"content": message}, timeout=10)
 
+                print("送信結果:", r.status_code)
+
                 if r.status_code == 204:
-                    print(f"[{category}] 投稿:", title)
+                    print(f"[{category}] 投稿成功:", title)
                     posted_links.add(link)
 
                 time.sleep(2)
@@ -49,11 +53,9 @@ def post_news():
                 print("通信エラー:", e)
 
 
-if __name__ == "__main__":
-    print("ニュースBot起動")
+print("ニュースBot起動")
 
-    while True:
-        post_news()
-        print("1時間待機...")
-        time.sleep(3600)
-        post_news()
+while True:
+    post_news()
+    print("1時間待機...")
+    time.sleep(3600)
