@@ -10,7 +10,7 @@ RSS_LIST = [
     "https://news.yahoo.co.jp/rss/topics/business.xml"
 ]
 
-KEYWORDS = ["AI", "IT", "金融", "投資", "企業", "スタートアップ", "テック", "資産"]
+KEYWORDS = ["AI", "IT", "金融", "投資", "企業", "スタートアップ", "テック"]
 HISTORY_FILE = "posted.json"
 
 
@@ -23,7 +23,6 @@ def load_history():
                 return set()
     return set()
 
-requests.post(WEBHOOK_URL, json={"content": "テスト投稿成功"})
 
 def save_history(history):
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
@@ -41,18 +40,20 @@ def post_news():
         feed = feedparser.parse(rss)
 
         for entry in feed.entries:
+            link = entry.link.strip()
             title = entry.title.strip()
 
-            if title in history:
+            if link in history:
                 continue
+
             if not contains_keyword(title):
                 continue
 
-            message = f"**{title}**\n{entry.link}"
+            message = f"**{title}**\n{link}"
             r = requests.post(WEBHOOK_URL, json={"content": message})
 
             if r.status_code == 204:
-                history.add(title)
+                history.add(link)
 
     save_history(history)
 
