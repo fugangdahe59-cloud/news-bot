@@ -56,3 +56,4 @@ if __name__ == "__main__":
         post_news()
         print("1時間待機...")
         time.sleep(3600)
+        post_news()
