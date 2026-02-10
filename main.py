@@ -1,10 +1,6 @@
-import os
-
-print("IT:", os.getenv("WEBHOOK_IT"))
-print("BUS:", os.getenv("WEBHOOK_BUSINESS"))
-
 import feedparser
 import requests
+import json
 import os
 import time
 
@@ -18,44 +14,51 @@ RSS_FEEDS = {
     "business": "https://news.yahoo.co.jp/rss/topics/business.xml"
 }
 
-posted_links = set()
+HISTORY_FILE = "posted.json"
+
+
+def load_history():
+    if os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            return set(json.load(f))
+    return set()
+
+
+def save_history(history):
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(list(history), f, ensure_ascii=False)
 
 
 def post_news():
     print("ニュース取得開始")
-
+    history = load_history()
     session = requests.Session()
 
     for category, rss in RSS_FEEDS.items():
-        feed = feedparser.parse(rss)
         webhook = WEBHOOKS.get(category)
 
         if not webhook:
             print(f"{category} Webhook未設定")
             continue
 
+        feed = feedparser.parse(rss)
+
         for entry in feed.entries:
             link = entry.link.strip()
             title = entry.title.strip()
 
-            if link in posted_links:
+            if link in history:
                 continue
 
             message = f"**{title}**\n{link}\n出典: Yahoo!ニュース"
 
-            try:
-                r = session.post(webhook, json={"content": message}, timeout=10)
+            r = session.post(webhook, json={"content": message})
 
-                print("送信結果:", r.status_code)
+            if r.status_code == 204:
+                print(f"[{category}] 投稿:", title)
+                history.add(link)
 
-                if r.status_code == 204:
-                    print(f"[{category}] 投稿成功:", title)
-                    posted_links.add(link)
-
-                time.sleep(2)
-
-            except Exception as e:
-                print("通信エラー:", e)
+    save_history(history)
 
 
 print("ニュースBot起動")
