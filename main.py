@@ -1,3 +1,6 @@
+import os
+print("IT:", os.getenv("WEBHOOK_IT"))
+print("BUS:", os.getenv("WEBHOOK_BUSINESS"))
 import feedparser
 import requests
 import json
