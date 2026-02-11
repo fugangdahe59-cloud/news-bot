@@ -1,85 +1,94 @@
 import os
-import time
 import datetime
-import feedparser
-import requests
+import time
 import random
-# OpenAIライブラリ
-from openai import OpenAI
+import requests
+import feedparser
 
-# 環境変数 or 直接埋め込み
-WEBHOOK_IT = os.getenv("WEBHOOK_IT") or "https://discord.com/api/webhooks/XXXX/XXXX"
-WEBHOOK_BUSINESS = os.getenv("WEBHOOK_BUSINESS") or "https://discord.com/api/webhooks/XXXX/XXXX"
-WEBHOOK_SUMMARY = os.getenv("WEBHOOK_SUMMARY") or "https://discord.com/api/webhooks/XXXX/XXXX"
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or "sk-XXXX"
+# Webhook設定
+WEBHOOK_IT = os.getenv("WEBHOOK_IT")
+WEBHOOK_BUSINESS = os.getenv("WEBHOOK_BUSINESS")
+WEBHOOK_IT_SUMMARY = os.getenv("SUMMARY_IT")
+WEBHOOK_BUSINESS_SUMMARY = os.getenv("SUMMARY_BUSINESS")
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+# 投稿間隔（秒）
+WAIT_HOURS = 1
+MIN_SUMMARY_DELAY = 600  # 10分
+MAX_SUMMARY_DELAY = 1800 # 30分
 
-# RSSフィードURL
-RSS_IT = "https://example.com/it.rss"
-RSS_BUSINESS = "https://example.com/business.rss"
-
-# 投稿済みニュース管理
-posted_news = set()
-daily_news_summary = []
-
+# JST取得関数（警告対応済み）
 def jst_now():
-    return datetime.datetime.utcnow() + datetime.timedelta(hours=9)
+    return datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=9)
 
-def post_to_discord(webhook_url, content):
-    if webhook_url:
-        requests.post(webhook_url, json={"content": content})
+# 6時〜22時チェック
+def is_posting_time():
+    hour = jst_now().hour
+    return 6 <= hour < 22
 
-def generate_summary(news_title, news_link):
-    # AIで要約生成
-    prompt = f"ニュースタイトル: {news_title}\nリンク: {news_link}\n\n上記ニュースを以下の形式で日本語で作ってください:\n【ニュース要約】\n【影響】\n【チャンス】\n【ひとこと解説】"
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.7
-    )
-    summary_text = response.choices[0].message.content
-    return summary_text
+# Discord Webhook送信
+def post_to_discord(webhook_url, title, content):
+    if not webhook_url:
+        print("Webhook未設定")
+        return
+    data = {
+        "content": f"【ニュース】{title}\n{content}"
+    }
+    try:
+        response = requests.post(webhook_url, json=data)
+        response.raise_for_status()
+        print(f"投稿成功: {title}")
+    except Exception as e:
+        print(f"[ERROR] 投稿失敗: {e}")
 
-def fetch_and_post_rss(rss_url, webhook_main, webhook_summary):
-    feed = feedparser.parse(rss_url)
-    for entry in feed.entries:
-        news_id = entry.get("id") or entry.link
-        if news_id in posted_news:
-            continue  # 既に投稿済みならスキップ
-        title = entry.title
-        link = entry.link
-        # 通常投稿
-        post_to_discord(webhook_main, f"[ニュース] {title}\n{link}")
-        # 要約生成は10〜30分ランダム待機
-        wait_sec = random.randint(600, 1800)
-        time.sleep(wait_sec)
-        summary = generate_summary(title, link)
-        post_to_discord(webhook_summary, summary)
-        # 投稿済み管理
-        posted_news.add(news_id)
-        daily_news_summary.append(summary)
+# AI要約（ダミー関数、OpenAI等に置き換え可）
+def generate_summary(title, content):
+    # 実際にはOpenAI API等を使って要約を生成
+    summary_template = f"""【ニュース要約】
+{title}
 
-def daily_summary_post():
-    now = jst_now()
-    if now.hour == 22:  # 22時に一日の振り返り
-        if daily_news_summary:
-            content = f"【{now.year}年{now.month}月{now.day}日の振り返り】\n\n" + "\n\n".join(daily_news_summary)
-            post_to_discord(WEBHOOK_SUMMARY, content)
-            daily_news_summary.clear()  # 投稿後はリセット
+【影響】
+{content[:50]}...
 
-def main_loop():
+【チャンス】
+可能性あり
+
+【ひとこと解説】
+簡単な解説をここに"""
+    return summary_template
+
+# メインループ
+def main():
+    print("ニュースBot起動")
     while True:
-        now = jst_now()
-        # 6時〜22時のみニュース取得
-        if 6 <= now.hour < 22:
-            fetch_and_post_rss(RSS_IT, WEBHOOK_IT, WEBHOOK_SUMMARY)
-            fetch_and_post_rss(RSS_BUSINESS, WEBHOOK_BUSINESS, WEBHOOK_SUMMARY)
-        # 22時は振り返り投稿
-        daily_summary_post()
-        print(f"[{now}] 1時間待機...")
-        time.sleep(3600)
+        if is_posting_time():
+            # RSS例（置き換え可）
+            feed = feedparser.parse("https://example.com/rss") # 実際のRSSに変更
+            posted_titles = set()  # 同じニュースの二重投稿防止
+
+            for entry in feed.entries:
+                if entry.title in posted_titles:
+                    continue
+                posted_titles.add(entry.title)
+
+                post_to_discord(WEBHOOK_IT, entry.title, entry.summary)
+                
+                # ランダム待機後に要約を別チャンネルに投稿
+                delay = random.randint(MIN_SUMMARY_DELAY, MAX_SUMMARY_DELAY)
+                print(f"[IT] 要約待機 {delay}秒")
+                time.sleep(delay)
+                
+                summary = generate_summary(entry.title, entry.summary)
+                post_to_discord(WEBHOOK_IT_SUMMARY, entry.title, summary)
+
+                post_to_discord(WEBHOOK_BUSINESS, entry.title, entry.summary)
+                print(f"[BUSINESS] 要約待機 {delay}秒")
+                time.sleep(delay)
+                post_to_discord(WEBHOOK_BUSINESS_SUMMARY, entry.title, summary)
+
+        else:
+            print(f"夜間停止中（{jst_now().hour}:00）")
+        print(f"{WAIT_HOURS}時間待機...")
+        time.sleep(WAIT_HOURS * 3600)
 
 if __name__ == "__main__":
-    print("ニュースBot起動")
-    main_loop()
+    main()
