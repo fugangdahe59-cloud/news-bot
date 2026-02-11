@@ -1,3 +1,8 @@
+print("IT:", WEBHOOK_IT)
+print("BUS:", WEBHOOK_BUSINESS)
+print("IT_SUM:", WEBHOOK_IT_SUMMARY)
+print("BUS_SUM:", WEBHOOK_BUSINESS_SUMMARY)
+
 import requests
 import time
 import random
