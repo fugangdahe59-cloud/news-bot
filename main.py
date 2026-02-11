@@ -4,6 +4,7 @@ import asyncio
 import random
 from datetime import datetime, timezone, timedelta
 from openai import OpenAI
+import aiohttp
 
 # 環境変数
 WEBHOOK_IT = os.getenv("WEBHOOK_IT")
@@ -43,12 +44,14 @@ URL: {link}
     )
     return response.choices[0].message.content
 
+# SyncWebhook + aiohttp で非同期に投稿
 async def send_webhook(url, content):
-    async with discord.AsyncWebhook.from_url(url) as webhook:
-        await webhook.send(content)
+    async with aiohttp.ClientSession() as session:
+        webhook = discord.SyncWebhook.from_url(url, adapter=discord.RequestsWebhookAdapter())
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, lambda: webhook.send(content))
 
 async def test_post():
-    # ダミーのニュース
     news_list = [
         ("IT", "GeForce RTX 50シリーズ購入キャンペーン", "https://example.com/news1"),
         ("BUSINESS", "シャープ亀山第2工場 売却不成立", "https://example.com/news2")
@@ -62,10 +65,10 @@ async def test_post():
         await send_webhook(target_webhook, f"[{category}] 投稿: {title} ({link})")
         print(f"[{category}] 投稿済み: {title}")
 
-        # ランダム待機（10〜30秒でテスト用に短くしました）
+        # 待機
         await asyncio.sleep(random.randint(10, 30))
 
-        # 要約生成・投稿
+        # 要約投稿
         summary = await generate_summary(title, link)
         await send_webhook(summary_webhook, summary)
         print(f"[{category}] 要約投稿済み: {title}")
