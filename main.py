@@ -4,61 +4,84 @@ import random
 import datetime
 import requests
 import feedparser
+from openai import OpenAI
+
+print("ニュースBot起動")
 
 # ===== 環境変数 =====
 WEBHOOK_IT = os.getenv("WEBHOOK_IT")
 WEBHOOK_BUSINESS = os.getenv("WEBHOOK_BUSINESS")
 SUMMARY_IT = os.getenv("SUMMARY_IT")
 SUMMARY_BUSINESS = os.getenv("SUMMARY_BUSINESS")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 # ===== RSS =====
-RSS_IT = "https://news.yahoo.co.jp/rss/topics/it.xml"
-RSS_BUSINESS = "https://news.yahoo.co.jp/rss/topics/business.xml"
+RSS_IT = "https://news.yahoo.co.jp/rss/categories/it.xml"
+RSS_BUSINESS = "https://news.yahoo.co.jp/rss/categories/business.xml"
 
-# ===== 夜間停止（日本時間）=====
+posted = set()
+
 def is_night():
-    jst = datetime.datetime.utcnow() + datetime.timedelta(hours=9)
+    jst = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=9)
     hour = jst.hour
     return hour >= 22 or hour < 6
-
 
 def send(webhook, text):
     if not webhook:
         print("Webhook未設定")
         return
-    try:
-        requests.post(webhook, json={"content": text}, timeout=10)
-    except Exception as e:
-        print("送信エラー:", e)
+    requests.post(webhook, json={"content": text})
 
+def ai_summary(text):
+    prompt = f"""
+以下のニュースをビジネス視点で分析してください。
 
-def summarize(title):
-    # 簡易要約（あとでAI要約にも変更可能）
-    return f"要約: {title} に関する注目ニュースです。"
+・要約（2〜3行）
+・企業への影響
+・市場への意味
+・今後の展開予測
 
+ニュース:
+{text}
+"""
 
-def process_feed(rss, webhook, summary_hook, label):
-    feed = feedparser.parse(rss)
+    res = client.chat.completions.create(
+        model="gpt-5-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.5
+    )
+
+    return res.choices[0].message.content
+
+def process_feed(feed_url, webhook, summary_webhook, label):
+    feed = feedparser.parse(feed_url)
 
     for entry in feed.entries[:3]:
+        if entry.link in posted:
+            continue
+
+        posted.add(entry.link)
+
         title = entry.title
         link = entry.link
+        text = f"[{label}] {title}\n{link}"
 
-        msg = f"[{label}] {title}\n{link}"
-        send(webhook, msg)
+        send(webhook, text)
         print(f"[{label}] 投稿:", title)
 
-        # 10〜30分ランダム待機
-        wait = random.randint(600, 1800)
-        print(f"[{label}] 要約待機 {wait}秒")
-        time.sleep(wait)
+        # 要約をランダム遅延
+        delay = random.randint(600, 1800)
+        print(f"[{label}] 要約待機 {delay}秒")
+        time.sleep(delay)
 
-        summary = summarize(title)
-        send(summary_hook, f"[{label}要約] {summary}")
-
-
-# ===== メインループ =====
-print("ニュースBot起動")
+        try:
+            summary = ai_summary(title)
+            send(summary_webhook, f"🧠 要約\n{summary}")
+            print(f"[{label}] 要約投稿完了")
+        except Exception as e:
+            print("AIエラー:", e)
 
 while True:
     print("ニュース取得開始")
