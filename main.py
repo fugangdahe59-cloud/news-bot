@@ -2,113 +2,70 @@ import datetime
 import time
 import feedparser
 import requests
-import openai
+import json
+import random
 
-# -----------------------------
-# Webhook・API設定
-# -----------------------------
-WEBHOOK_IT = "https://discord.com/api/webhooks/xxx/yyy"
-WEBHOOK_BUSINESS = "https://discord.com/api/webhooks/xxx/yyy"
-WEBHOOK_SUMMARY = "https://discord.com/api/webhooks/xxx/yyy"  # IT・ビジネス共通
-OPENAI_API_KEY = "sk-..."  # ご自身のOpenAIキー
-openai.api_key = OPENAI_API_KEY
+# =========================
+# Webhook 設定
+# =========================
+WEBHOOK_IT = "YOUR_WEBHOOK_IT"
+WEBHOOK_BUSINESS = "YOUR_WEBHOOK_BUSINESS"
+SUMMARY_WEBHOOK = "YOUR_WEBHOOK_SUMMARY"  # 22時振り返り用
 
-# -----------------------------
-# ニュース管理用
-# -----------------------------
-posted_urls = set()     # 重複防止
-today_entries = []      # 22時の振り返り用
+# ニュースRSSリスト
+FEEDS_IT = ["https://example.com/it.rss"]
+FEEDS_BUSINESS = ["https://example.com/business.rss"]
 
-# -----------------------------
-# ヘルパー関数
-# -----------------------------
-def jst_now():
-    return datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=9)
+# 投稿済みニュース管理
+posted_titles = set()
 
-def post_to_discord(webhook_url, title, content):
-    payload = {
-        "content": f"**{title}**\n{content}"
-    }
-    try:
-        requests.post(webhook_url, json=payload)
-    except Exception as e:
-        print(f"[ERROR] Discord投稿失敗: {e}")
+# 投稿可能時間判定（日本時間6:00〜22:00）
+def is_post_time():
+    jst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
+    return 6 <= jst.hour < 22
 
-# -----------------------------
-# ニュース取得・投稿
-# -----------------------------
-def fetch_and_post_news():
-    # ここにRSSフィードURLリスト
-    feeds = [
-        ("IT", "https://example.com/it/rss", WEBHOOK_IT),
-        ("BUSINESS", "https://example.com/business/rss", WEBHOOK_BUSINESS)
-    ]
-    for category, url, webhook in feeds:
+# ニュースをDiscordに送信
+def post_to_discord(webhook, title, link):
+    data = {"content": f"{title}\n{link}"}
+    requests.post(webhook, json=data)
+
+# AI要約付き投稿（擬似例）
+def post_summary(webhook, title, link):
+    # ここでAI要約処理を追加できます
+    summary = f"【ニュース要約】\n{title}\n\n【影響】\n影響の分析\n\n【チャンス】\nチャンスの分析\n\n【ひとこと解説】\n簡単解説"
+    data = {"content": f"{summary}\n{link}"}
+    requests.post(webhook, json=data)
+
+# ニュース取得と投稿
+def fetch_and_post(feeds, webhook, summary_webhook=None):
+    for url in feeds:
         feed = feedparser.parse(url)
         for entry in feed.entries:
-            if entry.link in posted_urls:
-                continue
-            now = jst_now()
-            hour = now.hour
-            # 6時～22時のみ投稿
-            if 6 <= hour < 22:
-                post_to_discord(webhook, entry.title, entry.summary)
-                posted_urls.add(entry.link)
-                today_entries.append(entry)
-                print(f"[{category}] 投稿: {entry.title}")
+            if entry.title not in posted_titles:
+                if is_post_time():
+                    post_to_discord(webhook, entry.title, entry.link)
+                    if summary_webhook:
+                        # 10〜30分後に要約投稿
+                        delay = random.randint(600, 1800)
+                        time.sleep(delay)
+                        post_summary(summary_webhook, entry.title, entry.link)
+                posted_titles.add(entry.title)
 
-# -----------------------------
-# 22時振り返り生成
-# -----------------------------
-def generate_daily_summary():
-    if not today_entries:
-        print("今日のニュースなし、振り返りスキップ")
-        return
-    today = jst_now().strftime("%Y-%m-%d")
-    news_summary = ""
-    for entry in today_entries:
-        news_summary += f"- {entry.title}: {entry.summary}\n"
-    
-    prompt = f"""
-今日（{today}）のニュースです:
-{news_summary}
+# 22時振り返り投稿
+def daily_summary():
+    jst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
+    if jst.hour == 22 and jst.minute < 5:  # 22:00前後5分で一度だけ投稿
+        summary_text = f"【本日の振り返り】 {jst.strftime('%Y-%m-%d')}\n今日のIT・経済ニュースまとめと今後の対策案"
+        requests.post(SUMMARY_WEBHOOK, json={"content": summary_text})
 
-上記ニュースをもとに、以下の形式でまとめてください。
-【ニュース要約】
-〜〜〜
-
-【影響】
-〜〜〜
-
-【チャンス】
-〜〜〜
-
-【ひとこと解説】
-〜〜〜
-"""
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-        )
-        analysis_text = response.choices[0].message.content.strip()
-        post_to_discord(WEBHOOK_SUMMARY, f"{today} の振り返り", analysis_text)
-        print("振り返り投稿成功")
-        today_entries.clear()  # 翌日に備えてリセット
-    except Exception as e:
-        print(f"[ERROR] 振り返り生成失敗: {e}")
-
-# -----------------------------
+# =========================
 # メインループ
-# -----------------------------
-if __name__ == "__main__":
-    while True:
-        now = jst_now()
-        hour = now.hour
-        if hour == 22:  # 22時に振り返り
-            generate_daily_summary()
-            time.sleep(3600)  # 1時間スキップして再チェック
-        else:
-            fetch_and_post_news()
-            time.sleep(60*5)  # 5分ごとにニュースチェック
+# =========================
+while True:
+    try:
+        fetch_and_post(FEEDS_IT, WEBHOOK_IT, SUMMARY_WEBHOOK)
+        fetch_and_post(FEEDS_BUSINESS, WEBHOOK_BUSINESS, SUMMARY_WEBHOOK)
+        daily_summary()
+    except Exception as e:
+        print("エラー:", e)
+    time.sleep(60)  # 1分ごとにチェック
