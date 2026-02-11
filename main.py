@@ -82,7 +82,7 @@ async def main():
     print("🔍 ニュースBot起動")
 
     # 22時を過ぎたら配信停止
-    if now_jst().hour >= 22:
+    if now_jst().hour >= 23:
         print("🔹 22時以降のため配信停止")
         return
 
