@@ -1,3 +1,9 @@
+
+WEBHOOK_IT = os.getenv("https://discord.com/api/webhooks/1470770157617156226/5bjAA3z39qYH5t3BHIUJG0bIrpZBCLtDv7TlCEl_eSi7tT2esf8uGgIdlA0TXxpcmdSf")
+WEBHOOK_BUSINESS = os.getenv("https://discord.com/api/webhooks/1470770770329206785/otRtyL8dbJ-zY7wjdA5KdaW_TUZmzpFIhAy0Zvqfj5kAn_5AUlZP_68DrR7pZR9In2Xu")
+WEBHOOK_IT_SUMMARY = os.getenv("https://discord.com/api/webhooks/1470952257192202444/ih8l06d2eR25zuN3aU6vRLsDrX0Qs9Ov0PxvKclAO9W9jq5SD8fB-tJH0RWhFy-Tp_HA")
+WEBHOOK_BUSINESS_SUMMARY = os.getenv("https://discord.com/api/webhooks/1470952266230923418/zCuush3D7gYGX63_kaSpDyyuUKGiwM7_t1C-JF25zwcchPTwSIAPQneSZiT7fmdCRnZa")
+
 import requests
 import time
 import random
@@ -6,11 +12,6 @@ from datetime import datetime, timezone, timedelta
 import feedparser
 
 JST = timezone(timedelta(hours=9))
-
-WEBHOOK_IT = os.getenv("https://discord.com/api/webhooks/1470770157617156226/5bjAA3z39qYH5t3BHIUJG0bIrpZBCLtDv7TlCEl_eSi7tT2esf8uGgIdlA0TXxpcmdSf")
-WEBHOOK_BUSINESS = os.getenv("https://discord.com/api/webhooks/1470770770329206785/otRtyL8dbJ-zY7wjdA5KdaW_TUZmzpFIhAy0Zvqfj5kAn_5AUlZP_68DrR7pZR9In2Xu")
-WEBHOOK_IT_SUMMARY = os.getenv("https://discord.com/api/webhooks/1470952257192202444/ih8l06d2eR25zuN3aU6vRLsDrX0Qs9Ov0PxvKclAO9W9jq5SD8fB-tJH0RWhFy-Tp_HA")
-WEBHOOK_BUSINESS_SUMMARY = os.getenv("https://discord.com/api/webhooks/1470952266230923418/zCuush3D7gYGX63_kaSpDyyuUKGiwM7_t1C-JF25zwcchPTwSIAPQneSZiT7fmdCRnZa")
 
 print("ニュースBot起動")
 
