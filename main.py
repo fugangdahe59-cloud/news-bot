@@ -1,79 +1,82 @@
 import os
 import time
+import random
 import datetime
 import requests
 import feedparser
+from openai import OpenAI
 
+# ===== 環境変数 =====
 WEBHOOK_IT = os.getenv("WEBHOOK_IT")
-WEBHOOK_BUSINESS = os.getenv("WEBHOOK_BUSINESS")
-SUMMARY_IT = os.getenv("SUMMARY_IT")
-SUMMARY_BUSINESS = os.getenv("SUMMARY_BUSINESS")
+WEBHOOK_SUMMARY = os.getenv("SUMMARY_IT")
+OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 
-IT_FEED = "https://news.yahoo.co.jp/rss/topics/it.xml"
-BUSINESS_FEED = "https://news.yahoo.co.jp/rss/topics/business.xml"
+client = OpenAI(api_key=OPENAI_KEY)
 
+RSS_URL = "https://news.yahoo.co.jp/rss/topics/it.xml"
 
+posted_links = set()
+
+# ===== 稼働時間チェック =====
 def is_active_time():
-    # 日本時間取得
-    jst = datetime.datetime.utcnow() + datetime.timedelta(hours=9)
+    jst = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=9)
     hour = jst.hour
-
-    # 6:00〜22:00のみ動作
     return 6 <= hour < 22
 
-
-def send(webhook, message):
+# ===== Discord投稿 =====
+def send_discord(webhook, text):
     if not webhook:
         print("Webhook未設定")
         return
-    requests.post(webhook, json={"content": message})
+    requests.post(webhook, json={"content": text})
 
+# ===== AI要約 =====
+def summarize(text):
+    try:
+        res = client.responses.create(
+            model="gpt-5-mini",
+            input=f"次のニュースを短く要約してください:\n{text}"
+        )
+        return res.output_text
+    except Exception as e:
+        print("AI要約エラー:", e)
+        return "要約失敗"
 
-def fetch_news(feed_url):
-    feed = feedparser.parse(feed_url)
-    if feed.entries:
-        entry = feed.entries[0]
-        return entry.title, entry.link
-    return None, None
+# ===== メインループ =====
+print("ニュースBot起動")
 
+while True:
 
-def main():
-    print("ニュースBot起動")
+    if not is_active_time():
+        print("夜間停止中（6:00〜22:00のみ動作）")
+        time.sleep(3600)
+        continue
 
-    while True:
-        print("ニュース取得開始")
+    print("ニュース取得開始")
 
-        if not is_active_time():
-            print("夜間停止中（22:00〜6:00）")
-            time.sleep(3600)
+    feed = feedparser.parse(RSS_URL)
+
+    for entry in feed.entries[:1]:
+
+        if entry.link in posted_links:
             continue
 
-        # --- ITニュース ---
-        title, link = fetch_news(IT_FEED)
-        if title:
-            msg = f"[IT] {title}\n{link}"
-            print("投稿:", title)
-            send(WEBHOOK_IT, msg)
+        title = entry.title
+        link = entry.link
 
-            wait = 900 + int(os.urandom(1)[0])  # 15〜20分ランダム
-            print(f"[IT] 要約待機 {wait}秒")
-            time.sleep(wait)
-            send(SUMMARY_IT, f"【要約待機中】{title}")
+        message = f"📰 {title}\n{link}"
+        send_discord(WEBHOOK_IT, message)
+        print("投稿:", title)
 
-        # --- ビジネスニュース ---
-        title, link = fetch_news(BUSINESS_FEED)
-        if title:
-            msg = f"[Business] {title}\n{link}"
-            print("投稿:", title)
-            send(WEBHOOK_BUSINESS, msg)
+        wait = random.randint(600, 1800)
+        print("要約待機", wait, "秒")
+        time.sleep(wait)
 
-            wait = 900 + int(os.urandom(1)[0])
-            print(f"[Business] 要約待機 {wait}秒")
-            time.sleep(wait)
-            send(SUMMARY_BUSINESS, f"【要約待機中】{title}")
+        summary = summarize(title)
+        send_discord(WEBHOOK_SUMMARY, f"🤖 要約:\n{summary}")
 
-        time.sleep(3600)
+        posted_links.add(link)
 
-
-if __name__ == "__main__":
-    main()
+    sleep_time = random.randint(1800, 3600)
+    print("待機", sleep_time, "秒")
+    time.sleep(sleep_time)
