@@ -1,20 +1,36 @@
 import os
-import discord
 import asyncio
+import aiohttp
+import feedparser
 import random
 from datetime import datetime, timezone, timedelta
 from openai import OpenAI
-import aiohttp
 
-# 環境変数
+# ====== 環境変数 ======
 WEBHOOK_IT = os.getenv("WEBHOOK_IT")
 WEBHOOK_BUSINESS = os.getenv("WEBHOOK_BUSINESS")
 SUMMARY_IT = os.getenv("SUMMARY_IT")
 SUMMARY_BUSINESS = os.getenv("SUMMARY_BUSINESS")
+SUMMARY_DAILY = os.getenv("SUMMARY_DAILY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 openai = OpenAI(api_key=OPENAI_API_KEY)
 
+# ====== 記録用 ======
+posted_news = set()
+daily_news = []
+
+# ====== RSSフィード ======
+FEEDS = {
+    "IT": "https://example.com/it_rss.xml",
+    "BUSINESS": "https://example.com/business_rss.xml"
+}
+
+# JST取得
+def now_jst():
+    return datetime.now(timezone(timedelta(hours=9)))
+
+# OpenAIでニュース要約生成
 async def generate_summary(title, link):
     prompt = f"""ニュースタイトル: {title}
 URL: {link}
@@ -44,34 +60,69 @@ URL: {link}
     )
     return response.choices[0].message.content
 
-# SyncWebhook + aiohttp で非同期に投稿
+# aiohttpでDiscord Webhookに送信
 async def send_webhook(url, content):
     async with aiohttp.ClientSession() as session:
-        webhook = discord.SyncWebhook.from_url(url, adapter=discord.RequestsWebhookAdapter())
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, lambda: webhook.send(content))
+        await session.post(url, json={"content": content})
 
-async def test_post():
-    news_list = [
-        ("IT", "GeForce RTX 50シリーズ購入キャンペーン", "https://example.com/news1"),
-        ("BUSINESS", "シャープ亀山第2工場 売却不成立", "https://example.com/news2")
-    ]
+# RSS取得＋ニュース投稿
+async def fetch_and_post():
+    global daily_news
+    for category, feed_url in FEEDS.items():
+        feed = feedparser.parse(feed_url)
+        for entry in feed.entries:
+            news_id = getattr(entry, 'id', entry.link)
+            if news_id in posted_news:
+                continue
+            posted_news.add(news_id)
 
-    for category, title, link in news_list:
-        target_webhook = WEBHOOK_IT if category == "IT" else WEBHOOK_BUSINESS
-        summary_webhook = SUMMARY_IT if category == "IT" else SUMMARY_BUSINESS
+            title = entry.title
+            link = entry.link
 
-        # ニュース投稿
-        await send_webhook(target_webhook, f"[{category}] 投稿: {title} ({link})")
-        print(f"[{category}] 投稿済み: {title}")
+            # 投稿
+            target_webhook = WEBHOOK_IT if category == "IT" else WEBHOOK_BUSINESS
+            await send_webhook(target_webhook, f"[{category}] 投稿: {title} ({link})")
 
-        # 待機
-        await asyncio.sleep(random.randint(10, 30))
+            # 待機(10～30分)
+            await asyncio.sleep(random.randint(600, 1800))
 
-        # 要約投稿
-        summary = await generate_summary(title, link)
-        await send_webhook(summary_webhook, summary)
-        print(f"[{category}] 要約投稿済み: {title}")
+            # 要約生成
+            summary = await generate_summary(title, link)
+            summary_webhook = SUMMARY_IT if category == "IT" else SUMMARY_BUSINESS
+            await send_webhook(summary_webhook, summary)
+
+            daily_news.append((category, title, link))
+
+# 22時に振り返りまとめ投稿
+async def post_daily_summary():
+    global daily_news
+    if not daily_news:
+        return
+
+    now = now_jst()
+    content = f"【今日の振り返り】{now.year}年{now.month}月{now.day}日\n\n"
+    for c, t, l in daily_news:
+        content += f"[{c}] {t} ({l})\n"
+    await send_webhook(SUMMARY_DAILY, content)
+    daily_news.clear()
+
+# メインループ
+async def main_loop():
+    print("ニュースBot起動")
+    while True:
+        now = now_jst()
+
+        # 22時の振り返りチェック
+        if now.hour == 22 and now.minute == 0:
+            await post_daily_summary()
+            # 1分待機して再投稿を防止
+            await asyncio.sleep(60)
+
+        # 6時～22時のニュース取得
+        if 6 <= now.hour < 22:
+            await fetch_and_post()
+
+        await asyncio.sleep(60)  # 1分ごとにループ
 
 if __name__ == "__main__":
-    asyncio.run(test_post())
+    asyncio.run(main_loop())
