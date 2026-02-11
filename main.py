@@ -43,9 +43,6 @@ def save_history(history):
 def def is_night():
     return False
 
-    hour = datetime.now().hour
-    return hour >= 22 or hour < 6
-
 
 # ===== 要約生成（簡易）=====
 def make_summary(title):
