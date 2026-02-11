@@ -91,7 +91,7 @@ async def main_loop():
             print(f"🔍 {now.hour}時なので配信停止中")
 
         # 日次振り返りは22時以降に1回だけ送信
-        if now.hour >= 22:
+        if now.hour >= 23:
             if any(daily_news.values()):  # 1日分ニュースがある場合のみ
                 post_daily_review(daily_news)
                 print("🔍 1日の振り返り投稿完了")
