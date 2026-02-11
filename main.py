@@ -6,8 +6,10 @@ import discord
 import openai
 
 # ====== 環境変数 ======
-WEBHOOK_IT = os.getenv("WEBHOOK_IT")
-WEBHOOK_BUSINESS = os.getenv("WEBHOOK_BUSINESS")
+WEBHOOK_IT = os.getenv("WEBHOOK_IT")                  # ITニュース投稿用
+WEBHOOK_BUSINESS = os.getenv("WEBHOOK_BUSINESS")      # BUSINESSニュース投稿用
+WEBHOOK_SUMMARY_IT = os.getenv("WEBHOOK_SUMMARY_IT")  # IT要約用
+WEBHOOK_SUMMARY_BUSINESS = os.getenv("WEBHOOK_SUMMARY_BUSINESS")  # BUSINESS要約用
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 openai.api_key = OPENAI_API_KEY
 
@@ -21,23 +23,38 @@ FEEDS = {
 def now_jst():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
 
-# Discord Webhook 送信（同期）
-def send_webhook(url, category, title, link, summary=None):
+# Discord Webhook 送信（ニュース用）
+def send_news_webhook(url, category, title, link):
     if not url:
         print("[WARNING] Webhook URL が未設定です")
         return
-
     display_category = f"{category}トピック"
     content = f"{display_category}: {title}\n{link}"
-    if summary:
-        content += f"\n\n要約: {summary}"
-
     try:
         webhook = discord.SyncWebhook.from_url(url)
         webhook.send(content)
-        print("[OK] Discord 投稿:", content[:100])
+        print("[OK] Discord ニュース投稿:", content[:100])
     except Exception as e:
         print("[ERROR] Discord 投稿失敗:", e)
+
+# Discord Webhook 送信（要約/解説用）
+def send_summary_webhook(category, title, link, summary):
+    if category == "IT":
+        url = WEBHOOK_SUMMARY_IT
+    else:
+        url = WEBHOOK_SUMMARY_BUSINESS
+    if not url:
+        print(f"[WARNING] {category}要約 Webhook 未設定")
+        return
+
+    display_category = f"{category}トピック 要約"
+    content = f"{display_category}: {title}\n{link}\n\n要約: {summary}"
+    try:
+        webhook = discord.SyncWebhook.from_url(url)
+        webhook.send(content)
+        print(f"[OK] Discord {category}要約投稿:", content[:100])
+    except Exception as e:
+        print(f"[ERROR] Discord {category}要約投稿失敗:", e)
 
 # OpenAIで要約生成
 async def generate_summary(title, link):
@@ -63,29 +80,29 @@ async def fetch_and_post():
     for category, feed_url in FEEDS.items():
         print(f"--- {category} RSS 取得開始 ({feed_url}) ---")
         feed = feedparser.parse(feed_url)
-
         print(f"[{category}] entries count:", len(feed.entries))
         if not feed.entries:
-            print(f"[{category}] ニュースが取得できません")
-            send_webhook(WEBHOOK_IT if category == "IT" else WEBHOOK_BUSINESS,
-                         category, "ニュースが取得できません（entries 0）", "")
+            send_news_webhook(
+                WEBHOOK_IT if category == "IT" else WEBHOOK_BUSINESS,
+                category, "ニュースが取得できません（entries 0）", ""
+            )
             continue
 
-        # 複数件投稿（必要に応じて変更可能）
-        for entry in feed.entries[:5]:  # 先頭5件まで投稿
+        for entry in feed.entries[:5]:  # 先頭5件
             title = entry.title
             link = entry.link
 
-            # 要約生成
-            summary = await generate_summary(title, link)
-
-            send_webhook(
+            # ニュース投稿（要約なし）
+            send_news_webhook(
                 WEBHOOK_IT if category == "IT" else WEBHOOK_BUSINESS,
                 category,
                 title,
-                link,
-                summary
+                link
             )
+
+            # 要約生成（解説用チャンネルに送信、IT/Business別）
+            summary = await generate_summary(title, link)
+            send_summary_webhook(category, title, link, summary)
 
 # メイン関数
 async def main():
