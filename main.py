@@ -1,162 +1,85 @@
 import os
 import time
-import random
-import requests
-import feedparser
 import datetime
-import json
+import feedparser
+import requests
+import random
+# OpenAIライブラリ
 from openai import OpenAI
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# 環境変数 or 直接埋め込み
+WEBHOOK_IT = os.getenv("WEBHOOK_IT") or "https://discord.com/api/webhooks/XXXX/XXXX"
+WEBHOOK_BUSINESS = os.getenv("WEBHOOK_BUSINESS") or "https://discord.com/api/webhooks/XXXX/XXXX"
+WEBHOOK_SUMMARY = os.getenv("WEBHOOK_SUMMARY") or "https://discord.com/api/webhooks/XXXX/XXXX"
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or "sk-XXXX"
 
-WEBHOOK_IT = os.getenv("WEBHOOK_IT")
-WEBHOOK_BUSINESS = os.getenv("WEBHOOK_BUSINESS")
+client = OpenAI(api_key=OPENAI_API_KEY)
 
-# 1日振り返り専用チャット
-SUMMARY_IT = os.getenv("SUMMARY_IT")  # IT振り返り
-SUMMARY_BUSINESS = os.getenv("SUMMARY_BUSINESS")  # 経済振り返り
+# RSSフィードURL
+RSS_IT = "https://example.com/it.rss"
+RSS_BUSINESS = "https://example.com/business.rss"
 
-RSS_IT = "https://news.yahoo.co.jp/rss/categories/it.xml"
-RSS_BUSINESS = "https://news.yahoo.co.jp/rss/categories/business.xml"
+# 投稿済みニュース管理
+posted_news = set()
+daily_news_summary = []
 
-LOG_FILE = "today_log.json"
-
-# ---------------- 時間判定 ----------------
 def jst_now():
-    return datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=9)
+    return datetime.datetime.utcnow() + datetime.timedelta(hours=9)
 
-def active_time():
-    h = jst_now().hour
-    return 6 <= h < 22
+def post_to_discord(webhook_url, content):
+    if webhook_url:
+        requests.post(webhook_url, json={"content": content})
 
-# ---------------- ログ保存 ----------------
-def load_log():
-    if not os.path.exists(LOG_FILE):
-        return {"it": [], "biz": [], "date": str(jst_now().date())}
-    with open(LOG_FILE, "r") as f:
-        return json.load(f)
-
-def save_log(data):
-    with open(LOG_FILE, "w") as f:
-        json.dump(data, f, ensure_ascii=False)
-
-def reset_if_new_day(log):
-    today = str(jst_now().date())
-    if log["date"] != today:
-        return {"it": [], "biz": [], "date": today}
-    return log
-
-# ---------------- Webhook送信 ----------------
-def send(webhook, text):
-    if not webhook:
-        print("Webhook未設定")
-        return
-    requests.post(webhook, json={"content": text})
-
-# ---------------- AI要約テンプレ ----------------
-def ai_template_summary(title, desc, link):
-    prompt = f"""
-以下のニュースをテンプレ形式で書いてください。
-
-【ニュース要約】
-→ 何が起きたか
-
-【影響】
-→ 社会・業界への影響
-
-【チャンス】
-→ ビジネスや投資の視点
-
-【ひとこと解説】
-→ 人間っぽい一言コメント
-
-ニュース:
-タイトル: {title}
-内容: {desc}
-URL: {link}
-"""
-    res = client.chat.completions.create(
-        model="gpt-5-mini",
+def generate_summary(news_title, news_link):
+    # AIで要約生成
+    prompt = f"ニュースタイトル: {news_title}\nリンク: {news_link}\n\n上記ニュースを以下の形式で日本語で作ってください:\n【ニュース要約】\n【影響】\n【チャンス】\n【ひとこと解説】"
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
+        temperature=0.7
     )
-    return res.choices[0].message.content
+    summary_text = response.choices[0].message.content
+    return summary_text
 
-# ---------------- 22時まとめ ----------------
-def ai_daily_summary(log, log_type):
-    today = jst_now()
-    date_str = f"{today.year}年{today.month}月{today.day}日"
+def fetch_and_post_rss(rss_url, webhook_main, webhook_summary):
+    feed = feedparser.parse(rss_url)
+    for entry in feed.entries:
+        news_id = entry.get("id") or entry.link
+        if news_id in posted_news:
+            continue  # 既に投稿済みならスキップ
+        title = entry.title
+        link = entry.link
+        # 通常投稿
+        post_to_discord(webhook_main, f"[ニュース] {title}\n{link}")
+        # 要約生成は10〜30分ランダム待機
+        wait_sec = random.randint(600, 1800)
+        time.sleep(wait_sec)
+        summary = generate_summary(title, link)
+        post_to_discord(webhook_summary, summary)
+        # 投稿済み管理
+        posted_news.add(news_id)
+        daily_news_summary.append(summary)
 
-    news_list = log["it"] if log_type == "it" else log["biz"]
-
-    prompt = f"""
-今日のニュースを振り返って、
-「{date_str} の { 'IT' if log_type=='it' else '経済' }まとめ」を作ってください。
-ニュース一覧:
-{news_list}
-読みやすく、要点だけまとめてください。
-"""
-
-    res = client.chat.completions.create(
-        model="gpt-5-mini",
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    return res.choices[0].message.content
-
-# ---------------- ニュース処理 ----------------
-def process_feed(rss, webhook_news, webhook_summary, log_key):
-    feed = feedparser.parse(rss)
-    if not feed.entries:
-        return
-    entry = feed.entries[0]
-    title = entry.title
-    link = entry.link
-    desc = entry.get("summary", "")
-
-    send(webhook_news, f"📰 {title}\n{link}")
-
-    log = load_log()
-    log = reset_if_new_day(log)
-    log[log_key].append(title)
-    save_log(log)
-
-    wait = random.randint(600, 1800)  # 10〜30分ランダム
-    print("要約待機", wait)
-    time.sleep(wait)
-
-    summary = ai_template_summary(title, desc, link)
-    send(webhook_summary, summary)
-
-# ---------------- メインループ ----------------
-print("ニュースBot起動")
-
-while True:
+def daily_summary_post():
     now = jst_now()
-    hour = now.hour
-    minute = now.minute
+    if now.hour == 22:  # 22時に一日の振り返り
+        if daily_news_summary:
+            content = f"【{now.year}年{now.month}月{now.day}日の振り返り】\n\n" + "\n\n".join(daily_news_summary)
+            post_to_discord(WEBHOOK_SUMMARY, content)
+            daily_news_summary.clear()  # 投稿後はリセット
 
-    log = load_log()
-    log = reset_if_new_day(log)
-    save_log(log)
+def main_loop():
+    while True:
+        now = jst_now()
+        # 6時〜22時のみニュース取得
+        if 6 <= now.hour < 22:
+            fetch_and_post_rss(RSS_IT, WEBHOOK_IT, WEBHOOK_SUMMARY)
+            fetch_and_post_rss(RSS_BUSINESS, WEBHOOK_BUSINESS, WEBHOOK_SUMMARY)
+        # 22時は振り返り投稿
+        daily_summary_post()
+        print(f"[{now}] 1時間待機...")
+        time.sleep(3600)
 
-    # 🔥 22時の振り返り
-    if hour == 22 and minute < 5:
-        print("22時まとめ投稿")
-        summary_it = ai_daily_summary(log, "it")
-        summary_biz = ai_daily_summary(log, "biz")
-        send(SUMMARY_IT, f"📊 {now.year}年{now.month}月{now.day}日 ITまとめ\n{summary_it}")
-        send(SUMMARY_BUSINESS, f"📊 {now.year}年{now.month}月{now.day}日 経済まとめ\n{summary_biz}")
-
-        # 二重投稿防止
-        time.sleep(600)
-        continue
-
-    # 通常ニュース時間
-    if active_time():
-        print("ニュース取得開始")
-        process_feed(RSS_IT, WEBHOOK_IT, SUMMARY_IT, "it")
-        process_feed(RSS_BUSINESS, WEBHOOK_BUSINESS, SUMMARY_BUSINESS, "biz")
-    else:
-        print("時間外")
-
-    time.sleep(3600)
+if __name__ == "__main__":
+    print("ニュースBot起動")
+    main_loop()
