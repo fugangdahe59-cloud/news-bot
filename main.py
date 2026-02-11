@@ -42,7 +42,7 @@ def save_history(history):
 # ===== 夜間停止 =====
 def night_stop():
     hour = datetime.now().hour
-    return hour >= 25 or hour < 6
+    return hour >= 22 or hour < 6
 
 
 # ===== 要約生成（簡易）=====
