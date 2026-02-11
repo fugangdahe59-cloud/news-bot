@@ -1,104 +1,136 @@
-import os
-import feedparser
 import asyncio
+import feedparser
 import datetime
 import discord
-import random
+from discord.ext import tasks, commands
+import openai
+import os
 
-# ====== 環境変数 ======
-WEBHOOK_IT = os.getenv("WEBHOOK_IT")
-WEBHOOK_BUSINESS = os.getenv("WEBHOOK_BUSINESS")
-WEBHOOK_IT_SUMMARY = os.getenv("WEBHOOK_IT_SUMMARY")
-WEBHOOK_BUSINESS_SUMMARY = os.getenv("WEBHOOK_BUSINESS_SUMMARY")
-WEBHOOK_DAILY_REVIEW = os.getenv("WEBHOOK_DAILY_REVIEW")
+# ==== Discord設定 ====
+TOKEN = "YOUR_DISCORD_BOT_TOKEN"
+IT_CHANNEL_ID = 123456789012345678       # ITニュース投稿チャンネル
+BUSINESS_CHANNEL_ID = 234567890123456789 # ビジネスニュース投稿チャンネル
+IT_SUMMARY_CHANNEL_ID = 345678901234567890   # IT要約解説チャンネル
+BUSINESS_SUMMARY_CHANNEL_ID = 456789012345678901 # ビジネス要約解説チャンネル
 
-# RSS フィード
-FEEDS = {
-    "IT": "https://news.yahoo.co.jp/rss/topics/it.xml",
-    "BUSINESS": "https://news.yahoo.co.jp/rss/topics/business.xml"
-}
+# ==== OpenAI設定 ====
+openai.api_key = os.getenv("OPENAI_API_KEY")  # 環境変数にAPIキーを設定
 
-# JST 時間取得
-def now_jst():
-    return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
+intents = discord.Intents.default()
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Discord Webhook 送信
-def send_webhook(url, content):
-    if not url:
-        print("[WARNING] Webhook URL が未設定です")
-        return
+# ==== RSS URL ====
+IT_RSS = "https://news.yahoo.co.jp/rss/topics/it.xml"
+BUSINESS_RSS = "https://news.yahoo.co.jp/rss/topics/business.xml"
+
+# ==== 配信終了時刻 ====
+END_HOUR = 22
+
+# ニュース保持用
+posted_news = {"IT": set(), "BUSINESS": set()}
+
+# ==== 要約・解説生成 ====
+async def generate_summary_and_analysis(title, url):
+    """
+    OpenAI GPTで要約と解説を生成
+    失敗した場合は None を返す
+    """
     try:
-        webhook = discord.SyncWebhook.from_url(url)
-        webhook.send(content)
-        print("[OK] Discord 投稿:", content[:100])
+        prompt = f"""
+        以下のニュースタイトルとURLをもとに要約と解説を作成してください。
+        ニュースタイトル: {title}
+        URL: {url}
+
+        フォーマット:
+        要約: <ここに要約>
+        解説: <ここに解説>
+        """
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=300,
+            temperature=0.5
+        )
+        text = response.choices[0].message.content.strip()
+        # 分割して要約・解説に
+        if "要約:" in text and "解説:" in text:
+            summary = text.split("要約:")[1].split("解説:")[0].strip()
+            analysis = text.split("解説:")[1].strip()
+            return summary, analysis
+        else:
+            return None, None
     except Exception as e:
-        print("[ERROR] Discord 投稿失敗:", e)
+        print(f"[ERROR] 要約生成失敗: {e}")
+        return None, None
 
-# ニュース投稿
-def post_news(category, entry):
-    url = WEBHOOK_IT if category == "IT" else WEBHOOK_BUSINESS
-    send_webhook(url, f"{category}トピック: {entry.title}\n{entry.link}")
+# ==== ニュース取得と投稿 ====
+async def fetch_and_post_news(topic):
+    if topic == "IT":
+        rss_url = IT_RSS
+        channel_id = IT_CHANNEL_ID
+        summary_channel_id = IT_SUMMARY_CHANNEL_ID
+    else:
+        rss_url = BUSINESS_RSS
+        channel_id = BUSINESS_CHANNEL_ID
+        summary_channel_id = BUSINESS_SUMMARY_CHANNEL_ID
 
-# 要約投稿（失敗でも投稿）
-def post_summary(category, entry, summary_text):
-    url = WEBHOOK_IT_SUMMARY if category == "IT" else WEBHOOK_BUSINESS_SUMMARY
-    send_webhook(url, f"{category}要約: {summary_text}\n{entry.title}\n{entry.link}")
+    feed = feedparser.parse(rss_url)
+    channel = bot.get_channel(channel_id)
+    summary_channel = bot.get_channel(summary_channel_id)
 
-# ダミー要約生成
-def generate_summary(entry):
-    # 実際はOpenAI APIなどを呼ぶ
-    try:
-        # ここで要約生成
-        # raise Exception("dummy failure")  # テスト用失敗
-        return "【要約生成失敗】"  # 現状は失敗扱い
-    except:
-        return "【要約生成失敗】"
+    failed_posts = []
 
-# 1日の振り返り投稿
-def post_daily_review(daily_news):
-    now = now_jst().strftime("%Y-%m-%d")
-    content = f"📝 1日の振り返り ({now})\n"
-    for category, entries in daily_news.items():
-        content += f"--- {category} ---\n"
-        for entry in entries:
-            content += f"- {entry.title}\n{entry.link}\n"
-    send_webhook(WEBHOOK_DAILY_REVIEW, content)
+    for entry in feed.entries:
+        title = entry.title
+        url = entry.link
 
-async def main_loop():
-    daily_news = {"IT": [], "BUSINESS": []}
+        # 重複投稿チェック
+        if url in posted_news[topic]:
+            continue
+        posted_news[topic].add(url)
 
+        # まずニューステンプレ投稿
+        news_message = f"{topic}トピック\nタイトル：{title}\n原文：{url}\n要約：\n解説："
+        await channel.send(news_message)
+
+        # 要約解説生成
+        summary, analysis = await generate_summary_and_analysis(title, url)
+
+        if summary and analysis:
+            message = f"{topic}要約\nタイトル：{title}\n原文：{url}\n要約：{summary}\n解説：{analysis}"
+            await summary_channel.send(message)
+        else:
+            # 失敗時は一番下にまとめる
+            failed_posts.append(f"{topic}トピック\nタイトル：{title}\n原文：{url}\n要約：\n解説：\n要約解説失敗")
+
+    # 失敗分は最後にまとめて送信
+    for fail_msg in failed_posts:
+        await summary_channel.send(fail_msg)
+
+# ==== 定期タスク ====
+@tasks.loop(minutes=5)
+async def news_loop():
+    now = datetime.datetime.now()
+    if now.hour >= END_HOUR:
+        print(f"🔍 {END_HOUR}時を超えたため配信停止中")
+        return
+
+    await fetch_and_post_news("IT")
+    await fetch_and_post_news("BUSINESS")
+
+    # 最後に1日の振り返り（22時前55分以降）
+    if now.hour == END_HOUR - 1 and now.minute >= 55:
+        today = now.strftime("%Y-%m-%d")
+        it_summary = "📝 1日の振り返り ITトピック\n" + "\n".join(posted_news["IT"])
+        business_summary = "📝 1日の振り返り BUSINESSトピック\n" + "\n".join(posted_news["BUSINESS"])
+        it_channel = bot.get_channel(IT_CHANNEL_ID)
+        business_channel = bot.get_channel(BUSINESS_CHANNEL_ID)
+        await it_channel.send(it_summary)
+        await business_channel.send(business_summary)
+
+@bot.event
+async def on_ready():
     print("🔍 ニュースBot起動")
-    while True:
-        now = now_jst()
-        if 6 <= now.hour < 22:
-            for category, feed_url in FEEDS.items():
-                print(f"--- {category} RSS 取得開始 ({feed_url}) ---")
-                feed = feedparser.parse(feed_url)
-                if not feed.entries:
-                    print(f"[{category}] ニュース取得失敗")
-                    continue
-                for entry in feed.entries:
-                    # ニュース投稿
-                    post_news(category, entry)
-                    daily_news[category].append(entry)
+    news_loop.start()
 
-                    # 要約投稿（失敗でも要約チャンネルに送信）
-                    summary = generate_summary(entry)
-                    # ランダム遅延で投稿（10〜30分）
-                    await asyncio.sleep(random.randint(10*60, 30*60))
-                    post_summary(category, entry, summary)
-        else:
-            print(f"🔍 {now.hour}時なので配信停止中")
-
-        # 日次振り返りは22時以降に1回だけ送信
-        if now.hour >= 22:
-            if any(daily_news.values()):  # 1日分ニュースがある場合のみ
-                post_daily_review(daily_news)
-                print("🔍 1日の振り返り投稿完了")
-                daily_news = {"IT": [], "BUSINESS": []}  # リセット
-            await asyncio.sleep(60*60)  # 1時間スリープ
-        else:
-            await asyncio.sleep(10*60)  # 10分スリープ
-
-if __name__ == "__main__":
-    asyncio.run(main_loop())
+bot.run(TOKEN)
