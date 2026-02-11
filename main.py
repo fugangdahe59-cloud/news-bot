@@ -1,98 +1,79 @@
 import os
 import time
-import random
 import datetime
 import requests
 import feedparser
-from openai import OpenAI
 
-print("ニュースBot起動")
-
-# ===== 環境変数 =====
 WEBHOOK_IT = os.getenv("WEBHOOK_IT")
 WEBHOOK_BUSINESS = os.getenv("WEBHOOK_BUSINESS")
 SUMMARY_IT = os.getenv("SUMMARY_IT")
 SUMMARY_BUSINESS = os.getenv("SUMMARY_BUSINESS")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+IT_FEED = "https://news.yahoo.co.jp/rss/topics/it.xml"
+BUSINESS_FEED = "https://news.yahoo.co.jp/rss/topics/business.xml"
 
-# ===== RSS =====
-RSS_IT = "https://news.yahoo.co.jp/rss/categories/it.xml"
-RSS_BUSINESS = "https://news.yahoo.co.jp/rss/categories/business.xml"
 
-posted = set()
-
-def is_night():
-    jst = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=9)
+def is_active_time():
+    # 日本時間取得
+    jst = datetime.datetime.utcnow() + datetime.timedelta(hours=9)
     hour = jst.hour
-    return hour >= 22 or hour < 6
 
-def send(webhook, text):
+    # 6:00〜22:00のみ動作
+    return 6 <= hour < 22
+
+
+def send(webhook, message):
     if not webhook:
         print("Webhook未設定")
         return
-    requests.post(webhook, json={"content": text})
+    requests.post(webhook, json={"content": message})
 
-def ai_summary(text):
-    prompt = f"""
-以下のニュースをビジネス視点で分析してください。
 
-・要約（2〜3行）
-・企業への影響
-・市場への意味
-・今後の展開予測
-
-ニュース:
-{text}
-"""
-
-    res = client.chat.completions.create(
-        model="gpt-5-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.5
-    )
-
-    return res.choices[0].message.content
-
-def process_feed(feed_url, webhook, summary_webhook, label):
+def fetch_news(feed_url):
     feed = feedparser.parse(feed_url)
+    if feed.entries:
+        entry = feed.entries[0]
+        return entry.title, entry.link
+    return None, None
 
-    for entry in feed.entries[:3]:
-        if entry.link in posted:
+
+def main():
+    print("ニュースBot起動")
+
+    while True:
+        print("ニュース取得開始")
+
+        if not is_active_time():
+            print("夜間停止中（22:00〜6:00）")
+            time.sleep(3600)
             continue
 
-        posted.add(entry.link)
+        # --- ITニュース ---
+        title, link = fetch_news(IT_FEED)
+        if title:
+            msg = f"[IT] {title}\n{link}"
+            print("投稿:", title)
+            send(WEBHOOK_IT, msg)
 
-        title = entry.title
-        link = entry.link
-        text = f"[{label}] {title}\n{link}"
+            wait = 900 + int(os.urandom(1)[0])  # 15〜20分ランダム
+            print(f"[IT] 要約待機 {wait}秒")
+            time.sleep(wait)
+            send(SUMMARY_IT, f"【要約待機中】{title}")
 
-        send(webhook, text)
-        print(f"[{label}] 投稿:", title)
+        # --- ビジネスニュース ---
+        title, link = fetch_news(BUSINESS_FEED)
+        if title:
+            msg = f"[Business] {title}\n{link}"
+            print("投稿:", title)
+            send(WEBHOOK_BUSINESS, msg)
 
-        # 要約をランダム遅延
-        delay = random.randint(600, 1800)
-        print(f"[{label}] 要約待機 {delay}秒")
-        time.sleep(delay)
+            wait = 900 + int(os.urandom(1)[0])
+            print(f"[Business] 要約待機 {wait}秒")
+            time.sleep(wait)
+            send(SUMMARY_BUSINESS, f"【要約待機中】{title}")
 
-        try:
-            summary = ai_summary(title)
-            send(summary_webhook, f"🧠 要約\n{summary}")
-            print(f"[{label}] 要約投稿完了")
-        except Exception as e:
-            print("AIエラー:", e)
-
-while True:
-    print("ニュース取得開始")
-
-    if is_night():
-        print("夜間停止中（22:00〜6:00）")
         time.sleep(3600)
-        continue
 
-    process_feed(RSS_IT, WEBHOOK_IT, SUMMARY_IT, "IT")
-    process_feed(RSS_BUSINESS, WEBHOOK_BUSINESS, SUMMARY_BUSINESS, "ビジネス")
 
-    print("1時間待機...")
-    time.sleep(3600)
+if __name__ == "__main__":
+    main()
