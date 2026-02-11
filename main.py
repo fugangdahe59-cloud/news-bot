@@ -1,82 +1,89 @@
 import os
 import time
 import random
-import datetime
 import requests
 import feedparser
+import datetime
 from openai import OpenAI
 
-# ===== 環境変数 =====
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
 WEBHOOK_IT = os.getenv("WEBHOOK_IT")
-WEBHOOK_SUMMARY = os.getenv("SUMMARY_IT")
-OPENAI_KEY = os.getenv("OPENAI_API_KEY")
+SUMMARY_IT = os.getenv("SUMMARY_IT")
 
-client = OpenAI(api_key=OPENAI_KEY)
+RSS_IT = "https://news.yahoo.co.jp/rss/categories/it.xml"
 
-RSS_URL = "https://news.yahoo.co.jp/rss/topics/it.xml"
 
-posted_links = set()
-
-# ===== 稼働時間チェック =====
 def is_active_time():
-    jst = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=9)
+    jst = datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=9)
     hour = jst.hour
-    return 6 <= hour < 22
+    return 6 <= hour < 22  # 6時〜22時だけ動く
 
-# ===== Discord投稿 =====
-def send_discord(webhook, text):
+
+def send(webhook, text):
     if not webhook:
         print("Webhook未設定")
         return
     requests.post(webhook, json={"content": text})
 
-# ===== AI要約 =====
-def summarize(text):
-    try:
-        res = client.responses.create(
-            model="gpt-5-mini",
-            input=f"次のニュースを短く要約してください:\n{text}"
-        )
-        return res.output_text
-    except Exception as e:
-        print("AI要約エラー:", e)
-        return "要約失敗"
 
-# ===== メインループ =====
+def ai_summary(title, link, description):
+    prompt = f"""
+以下のニュースを人間っぽく要約＋解説してください。
+
+【条件】
+・3〜5行
+・中学生でも分かる
+・ニュースの意味や背景も軽く説明
+・SNSで読むような自然な文章
+
+タイトル: {title}
+内容: {description}
+URL: {link}
+"""
+
+    res = client.chat.completions.create(
+        model="gpt-5-mini",
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    return res.choices[0].message.content
+
+
 print("ニュースBot起動")
 
 while True:
 
     if not is_active_time():
-        print("夜間停止中（6:00〜22:00のみ動作）")
+        print("時間外 → 1時間待機")
         time.sleep(3600)
         continue
 
     print("ニュース取得開始")
 
-    feed = feedparser.parse(RSS_URL)
+    feed = feedparser.parse(RSS_IT)
 
-    for entry in feed.entries[:1]:
+    if not feed.entries:
+        print("ニュースなし")
+        time.sleep(3600)
+        continue
 
-        if entry.link in posted_links:
-            continue
+    entry = feed.entries[0]
 
-        title = entry.title
-        link = entry.link
+    title = entry.title
+    link = entry.link
+    description = entry.get("summary", "")
 
-        message = f"📰 {title}\n{link}"
-        send_discord(WEBHOOK_IT, message)
-        print("投稿:", title)
+    send(WEBHOOK_IT, f"📰 {title}\n{link}")
+    print("投稿:", title)
 
-        wait = random.randint(600, 1800)
-        print("要約待機", wait, "秒")
-        time.sleep(wait)
+    wait = random.randint(600, 1800)
+    print(f"要約待機 {wait} 秒")
+    time.sleep(wait)
 
-        summary = summarize(title)
-        send_discord(WEBHOOK_SUMMARY, f"🤖 要約:\n{summary}")
+    summary = ai_summary(title, link, description)
+    send(SUMMARY_IT, f"🤖 解説付き要約\n{summary}")
 
-        posted_links.add(link)
+    print("要約投稿完了")
 
-    sleep_time = random.randint(1800, 3600)
-    print("待機", sleep_time, "秒")
-    time.sleep(sleep_time)
+    time.sleep(3600)
