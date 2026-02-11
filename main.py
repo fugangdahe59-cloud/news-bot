@@ -1,5 +1,4 @@
 import os
-import discord
 import feedparser
 import asyncio
 import datetime
@@ -26,6 +25,7 @@ FEEDS = {
 }
 
 def now_jst():
+    """日本時間を返す"""
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
 
 async def generate_summary(title, link):
@@ -43,7 +43,8 @@ URL: {link}
 〜〜〜
 
 【ひとこと解説】
-〜〜〜"""
+〜〜〜
+"""
     loop = asyncio.get_event_loop()
     response = await loop.run_in_executor(None, lambda: openai.chat.completions.create(
         model="gpt-4o-mini",
@@ -53,11 +54,16 @@ URL: {link}
     return response.choices[0].message.content
 
 async def send_webhook(url, content):
+    """aiohttpでDiscord Webhook送信"""
     async with aiohttp.ClientSession() as session:
-        webhook = discord.SyncWebhook.from_url(url)
-        webhook.send(content)
+        webhook_data = {"content": content}
+        async with session.post(url, json=webhook_data) as resp:
+            if resp.status != 204:
+                text = await resp.text()
+                print(f"Webhook送信失敗: {resp.status} {text}")
 
 async def fetch_and_post():
+    """ニュース取得と投稿"""
     global daily_news
     for category, feed_url in FEEDS.items():
         feed = feedparser.parse(feed_url)
@@ -69,15 +75,14 @@ async def fetch_and_post():
 
             title = entry.title
             link = entry.link
-
-            # 投稿
+            
             target_webhook = WEBHOOK_IT if category == "IT" else WEBHOOK_BUSINESS
             await send_webhook(target_webhook, f"[{category}] 投稿: {title} ({link})")
 
-            # ランダム待機後に要約
-            await asyncio.sleep(random.randint(600, 1800))
+            # 待機と要約
+            await asyncio.sleep(random.randint(10, 30))  # 最初は短くしてテスト
             summary = await generate_summary(title, link)
-
+            
             summary_webhook = SUMMARY_IT if category == "IT" else SUMMARY_BUSINESS
             await send_webhook(summary_webhook, summary)
 
@@ -85,27 +90,26 @@ async def fetch_and_post():
 
 async def main_loop():
     print("ニュースBot起動")
-    
-    # 起動直後にすぐ投稿
+    # 起動時すぐ投稿
     await fetch_and_post()
-    
+
     while True:
         now = now_jst()
-
-        # 22時の振り返り投稿
+        # 22時の振り返り
         if now.hour == 22 and now.minute == 0:
             if daily_news:
                 content = f"【今日の振り返り】{now.year}年{now.month}月{now.day}日\n\n"
-                content += "\n".join([f"[{c}] {t} ({l})" for c, t, l in daily_news])
+                for c, t, l in daily_news:
+                    content += f"[{c}] {t} ({l})\n"
                 await send_webhook(SUMMARY_DAILY, content)
                 daily_news.clear()
             await asyncio.sleep(60)
 
-        # 6時〜22時の間でニュース取得
+        # 6時〜22時のニュース取得
         if 6 <= now.hour < 22:
             await fetch_and_post()
-
-        await asyncio.sleep(60)  # 1分ごとにループ
+        
+        await asyncio.sleep(60)
 
 if __name__ == "__main__":
     asyncio.run(main_loop())
