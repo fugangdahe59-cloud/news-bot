@@ -1,8 +1,3 @@
-print("IT:", WEBHOOK_IT)
-print("BUS:", WEBHOOK_BUSINESS)
-print("IT_SUM:", WEBHOOK_IT_SUMMARY)
-print("BUS_SUM:", WEBHOOK_BUSINESS_SUMMARY)
-
 import requests
 import time
 import random
@@ -18,6 +13,12 @@ WEBHOOK_IT_SUMMARY = os.getenv("https://discord.com/api/webhooks/147095225719220
 WEBHOOK_BUSINESS_SUMMARY = os.getenv("https://discord.com/api/webhooks/1470952266230923418/zCuush3D7gYGX63_kaSpDyyuUKGiwM7_t1C-JF25zwcchPTwSIAPQneSZiT7fmdCRnZa")
 
 print("ニュースBot起動")
+
+print("IT:", WEBHOOK_IT)
+print("BUS:", WEBHOOK_BUSINESS)
+print("IT_SUM:", WEBHOOK_IT_SUMMARY)
+print("BUS_SUM:", WEBHOOK_BUSINESS_SUMMARY)
+
 
 # ✅ テスト用：夜間停止なし
 def is_night():
