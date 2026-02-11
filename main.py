@@ -1,93 +1,75 @@
-
-WEBHOOK_IT = os.getenv("https://discord.com/api/webhooks/1470770157617156226/5bjAA3z39qYH5t3BHIUJG0bIrpZBCLtDv7TlCEl_eSi7tT2esf8uGgIdlA0TXxpcmdSf")
-WEBHOOK_BUSINESS = os.getenv("https://discord.com/api/webhooks/1470770770329206785/otRtyL8dbJ-zY7wjdA5KdaW_TUZmzpFIhAy0Zvqfj5kAn_5AUlZP_68DrR7pZR9In2Xu")
-WEBHOOK_IT_SUMMARY = os.getenv("https://discord.com/api/webhooks/1470952257192202444/ih8l06d2eR25zuN3aU6vRLsDrX0Qs9Ov0PxvKclAO9W9jq5SD8fB-tJH0RWhFy-Tp_HA")
-WEBHOOK_BUSINESS_SUMMARY = os.getenv("https://discord.com/api/webhooks/1470952266230923418/zCuush3D7gYGX63_kaSpDyyuUKGiwM7_t1C-JF25zwcchPTwSIAPQneSZiT7fmdCRnZa")
-
-import requests
+import os
 import time
 import random
-import os
-from datetime import datetime, timezone, timedelta
+import datetime
+import requests
 import feedparser
 
-JST = timezone(timedelta(hours=9))
+# ===== 環境変数 =====
+WEBHOOK_IT = os.getenv("WEBHOOK_IT")
+WEBHOOK_BUSINESS = os.getenv("WEBHOOK_BUSINESS")
+SUMMARY_IT = os.getenv("SUMMARY_IT")
+SUMMARY_BUSINESS = os.getenv("SUMMARY_BUSINESS")
 
-print("ニュースBot起動")
+# ===== RSS =====
+RSS_IT = "https://news.yahoo.co.jp/rss/topics/it.xml"
+RSS_BUSINESS = "https://news.yahoo.co.jp/rss/topics/business.xml"
 
-print("IT:", WEBHOOK_IT)
-print("BUS:", WEBHOOK_BUSINESS)
-print("IT_SUM:", WEBHOOK_IT_SUMMARY)
-print("BUS_SUM:", WEBHOOK_BUSINESS_SUMMARY)
-
-
-# ✅ テスト用：夜間停止なし
+# ===== 夜間停止（日本時間）=====
 def is_night():
-    return False
+    jst = datetime.datetime.utcnow() + datetime.timedelta(hours=9)
+    hour = jst.hour
+    return hour >= 22 or hour < 6
 
 
-def send_webhook(url, title, link):
-    if not url:
+def send(webhook, text):
+    if not webhook:
         print("Webhook未設定")
         return
-
     try:
-        requests.post(url, json={
-            "content": f"{title}\n{link}"
-        })
-        print(f"投稿成功: {title}")
+        requests.post(webhook, json={"content": text}, timeout=10)
     except Exception as e:
-        print("通信エラー:", e)
+        print("送信エラー:", e)
 
 
-def send_summary(url, title):
-    if not url:
-        return
-
-    summary = f"📰要約解説\n{title} に関するニュースです。\n詳しくはリンクを確認してください。"
-
-    try:
-        requests.post(url, json={"content": summary})
-        print("要約投稿成功")
-    except Exception as e:
-        print("要約通信エラー:", e)
+def summarize(title):
+    # 簡易要約（あとでAI要約にも変更可能）
+    return f"要約: {title} に関する注目ニュースです。"
 
 
-def process_feed(feed_url, webhook, summary_webhook, label):
-    feed = feedparser.parse(feed_url)
+def process_feed(rss, webhook, summary_hook, label):
+    feed = feedparser.parse(rss)
 
-    for entry in feed.entries[:5]:
+    for entry in feed.entries[:3]:
         title = entry.title
         link = entry.link
 
-        send_webhook(webhook, title, link)
+        msg = f"[{label}] {title}\n{link}"
+        send(webhook, msg)
+        print(f"[{label}] 投稿:", title)
 
-        delay = random.randint(600, 1800)  # 10〜30分
-        print(f"{label} 要約待機 {delay}秒")
-        time.sleep(delay)
+        # 10〜30分ランダム待機
+        wait = random.randint(600, 1800)
+        print(f"[{label}] 要約待機 {wait}秒")
+        time.sleep(wait)
 
-        send_summary(summary_webhook, title)
+        summary = summarize(title)
+        send(summary_hook, f"[{label}要約] {summary}")
 
+
+# ===== メインループ =====
+print("ニュースBot起動")
 
 while True:
     print("ニュース取得開始")
 
-    if not is_night():
-        process_feed(
-            "https://news.yahoo.co.jp/rss/categories/it.xml",
-            WEBHOOK_IT,
-            WEBHOOK_IT_SUMMARY,
-            "[IT]"
-        )
+    if is_night():
+        print("夜間停止中（22:00〜6:00）")
+        time.sleep(3600)
+        continue
 
-        process_feed(
-            "https://news.yahoo.co.jp/rss/categories/business.xml",
-            WEBHOOK_BUSINESS,
-            WEBHOOK_BUSINESS_SUMMARY,
-            "[BUSINESS]"
-        )
-    else:
-        print("夜間停止中")
+    process_feed(RSS_IT, WEBHOOK_IT, SUMMARY_IT, "IT")
+    process_feed(RSS_BUSINESS, WEBHOOK_BUSINESS, SUMMARY_BUSINESS, "ビジネス")
 
     print("1時間待機...")
     time.sleep(3600)
