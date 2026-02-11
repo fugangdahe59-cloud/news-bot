@@ -3,25 +3,20 @@ import feedparser
 import asyncio
 import datetime
 import discord
-import openai
 
 # ====== 環境変数 ======
 WEBHOOK_IT = os.getenv("WEBHOOK_IT")
 WEBHOOK_BUSINESS = os.getenv("WEBHOOK_BUSINESS")
 WEBHOOK_IT_SUMMARY = os.getenv("WEBHOOK_IT_SUMMARY")
 WEBHOOK_BUSINESS_SUMMARY = os.getenv("WEBHOOK_BUSINESS_SUMMARY")
-WEBHOOK_DAILY_SUMMARY = os.getenv("WEBHOOK_DAILY_SUMMARY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+WEBHOOK_DAILY_REVIEW = os.getenv("WEBHOOK_DAILY_REVIEW")
 
-openai.api_key = OPENAI_API_KEY
-
-# RSS フィード
 FEEDS = {
     "IT": "https://news.yahoo.co.jp/rss/topics/it.xml",
     "BUSINESS": "https://news.yahoo.co.jp/rss/topics/business.xml"
 }
 
-# JST 時間取得
+# JST時間取得
 def now_jst():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
 
@@ -37,73 +32,70 @@ def send_webhook(url, content):
     except Exception as e:
         print("[ERROR] Discord 投稿失敗:", e)
 
-# ニュース要約生成
-async def generate_summary(title, link):
-    prompt = f"以下のニュースタイトルの要約を簡潔に書いてください:\n{title}\nリンク: {link}"
-    try:
-        response = await asyncio.to_thread(
-            lambda: openai.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.5
-            )
-        )
-        summary = response.choices[0].message.content.strip()
-        return summary
-    except Exception as e:
-        print("[ERROR] 要約生成失敗:", e)
-        return "【要約生成失敗】"
-
-# ニュース取得と個別投稿
-async def fetch_and_post():
+# ニュース取得＆投稿
+async def fetch_and_post_news():
     daily_news = {"IT": [], "BUSINESS": []}
+
     for category, feed_url in FEEDS.items():
         print(f"--- {category} RSS 取得開始 ({feed_url}) ---")
         feed = feedparser.parse(feed_url)
-        entries = feed.entries
-        print(f"[{category}] entries count:", len(entries))
+        print(f"[{category}] entries count:", len(feed.entries))
 
-        if not entries:
+        if not feed.entries:
             send_webhook(WEBHOOK_IT if category=="IT" else WEBHOOK_BUSINESS,
                          f"{category}トピック: ニュースが取得できません")
             continue
 
-        for entry in entries:
+        for entry in feed.entries:
             title = entry.title
             link = entry.link
-
-            # 個別ニュース投稿
+            daily_news[category].append(f"{title}\n{link}")
             send_webhook(WEBHOOK_IT if category=="IT" else WEBHOOK_BUSINESS,
                          f"{category}トピック: {title}\n{link}")
 
-            # 要約生成
-            summary_text = await generate_summary(title, link)
-            send_webhook(WEBHOOK_IT_SUMMARY if category=="IT" else WEBHOOK_BUSINESS_SUMMARY,
-                         f"{category}トピック: {title}\n要約: {summary_text}")
-
-            # 日次まとめ用
-            daily_news[category].append((title, link, summary_text))
-
     return daily_news
 
-# 日次まとめ投稿（ブログ風）
-def post_daily_summary(daily_news):
-    content = f"📝 {now_jst().strftime('%Y/%m/%d')} ニュース振り返り\n\n"
-
+# 要約生成（簡易ダミー）
+async def generate_summaries(daily_news):
     for category in ["IT", "BUSINESS"]:
-        content += f"=== {category}トピック ===\n"
-        if not daily_news[category]:
-            content += "ニュースなし\n\n"
-            continue
-        for idx, (title, link, summary) in enumerate(daily_news[category], 1):
-            content += f"{idx}. {title}\n{link}\n要約: {summary}\n\n"
+        summary_webhook = WEBHOOK_IT_SUMMARY if category=="IT" else WEBHOOK_BUSINESS_SUMMARY
+        for news in daily_news[category]:
+            # 本番ではOpenAI APIで要約生成
+            try:
+                summary_text = "【要約生成失敗】"  # ダミー
+                send_webhook(summary_webhook, f"{category}要約: {summary_text}\n{news}")
+            except Exception as e:
+                print("[ERROR] 要約生成失敗:", e)
+                send_webhook(summary_webhook, f"【要約生成失敗】\n{news}")
 
-    send_webhook(WEBHOOK_DAILY_SUMMARY, content)
+# 1日の振り返り生成（ブログ風）
+def generate_daily_review(daily_news):
+    review = f"📝 1日の振り返り ({now_jst().strftime('%Y-%m-%d')})\n\n"
+    for category in ["IT", "BUSINESS"]:
+        review += f"--- {category} ---\n"
+        for news in daily_news[category]:
+            review += f"- {news}\n"
+        review += "\n"
+    return review
 
 async def main():
     print("🔍 ニュースBot起動")
-    daily_news = await fetch_and_post()
-    post_daily_summary(daily_news)
+
+    # 22時を過ぎたら配信停止
+    if now_jst().hour >= 22:
+        print("🔹 22時以降のため配信停止")
+        return
+
+    # ニュース取得＆投稿
+    daily_news = await fetch_and_post_news()
+
+    # 要約解説
+    await generate_summaries(daily_news)
+
+    # 1日の振り返り
+    review_text = generate_daily_review(daily_news)
+    send_webhook(WEBHOOK_DAILY_REVIEW, review_text)
+
     print("🔍 投稿完了")
 
 if __name__ == "__main__":
