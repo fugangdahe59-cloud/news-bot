@@ -1,9 +1,9 @@
 import os
-import discord
-import feedparser
 import asyncio
 import datetime
 import random
+import feedparser
+import aiohttp
 from openai import OpenAI
 
 # ====== 環境変数 ======
@@ -40,9 +40,13 @@ async def generate_summary(title, link):
     except Exception as e:
         return f"要約取得失敗: {e}"
 
-def send_sync_webhook(url, content):
-    webhook = discord.SyncWebhook.from_url(url)
-    webhook.send(content)
+# 非同期Webhook送信
+async def send_webhook(url, content):
+    async with aiohttp.ClientSession() as session:
+        payload = {"content": content}
+        async with session.post(url, json=payload) as resp:
+            if resp.status != 204 and resp.status != 200:
+                print(f"Webhook送信失敗: {resp.status}, {await resp.text()}")
 
 async def fetch_and_post(initial=False):
     global daily_news
@@ -58,14 +62,13 @@ async def fetch_and_post(initial=False):
             title = entry.title
             link = entry.link
             target_webhook = WEBHOOK_IT if category == "IT" else WEBHOOK_BUSINESS
-            send_sync_webhook(target_webhook, f"[{category}] 投稿: {title} ({link})")
+            await send_webhook(target_webhook, f"[{category}] 投稿: {title} ({link})")
 
-            # 初回投稿でなければ要約生成
             if not initial and 6 <= now_jst().hour < 22:
                 await asyncio.sleep(random.randint(600, 1800))
                 summary = await generate_summary(title, link)
                 summary_webhook = SUMMARY_IT if category == "IT" else SUMMARY_BUSINESS
-                send_sync_webhook(summary_webhook, summary)
+                await send_webhook(summary_webhook, summary)
 
             daily_news.append((category, title, link))
 
@@ -76,15 +79,14 @@ async def main_loop():
 
     while True:
         now = now_jst()
-        # 22時の振り返りチェック
+        # 22時の振り返り
         if now.hour == 22 and now.minute == 0 and daily_news:
             content = f"【今日の振り返り】{now.year}年{now.month}月{now.day}日\n\n"
             content += "\n".join([f"[{c}] {t} ({l})" for c, t, l in daily_news])
-            send_sync_webhook(SUMMARY_DAILY, content)
+            await send_webhook(SUMMARY_DAILY, content)
             daily_news.clear()
             await asyncio.sleep(60)
 
-        # 6時〜22時のニュース取得
         if 6 <= now.hour < 22:
             await fetch_and_post()
 
