@@ -1,71 +1,123 @@
-import datetime
-import time
+import os
+import discord
 import feedparser
-import requests
-import json
+import asyncio
+import datetime
 import random
+from openai import OpenAI
 
-# =========================
-# Webhook 設定
-# =========================
-WEBHOOK_IT = "YOUR_WEBHOOK_IT"
-WEBHOOK_BUSINESS = "YOUR_WEBHOOK_BUSINESS"
-SUMMARY_WEBHOOK = "YOUR_WEBHOOK_SUMMARY"  # 22時振り返り用
+# ====== 環境変数 ======
+WEBHOOK_IT = os.getenv("WEBHOOK_IT")
+WEBHOOK_BUSINESS = os.getenv("WEBHOOK_BUSINESS")
+SUMMARY_IT = os.getenv("SUMMARY_IT")
+SUMMARY_BUSINESS = os.getenv("SUMMARY_BUSINESS")
+SUMMARY_DAILY = os.getenv("SUMMARY_DAILY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+client = discord.Client(intents=discord.Intents.default())
+openai = OpenAI(api_key=OPENAI_API_KEY)
+
+# ニュースID保存（重複投稿防止）
+posted_news = set()
+daily_news = []
 
 # ニュースRSSリスト
-FEEDS_IT = ["https://example.com/it.rss"]
-FEEDS_BUSINESS = ["https://example.com/business.rss"]
+FEEDS = {
+    "IT": "https://example.com/it_rss.xml",
+    "BUSINESS": "https://example.com/business_rss.xml"
+}
 
-# 投稿済みニュース管理
-posted_titles = set()
+# JST現在時刻取得
+def now_jst():
+    return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
 
-# 投稿可能時間判定（日本時間6:00〜22:00）
-def is_post_time():
-    jst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
-    return 6 <= jst.hour < 22
+# AIで要約＋解説生成
+async def generate_summary(title, link):
+    prompt = f"""
+ニュースタイトル: {title}
+URL: {link}
 
-# ニュースをDiscordに送信
-def post_to_discord(webhook, title, link):
-    data = {"content": f"{title}\n{link}"}
-    requests.post(webhook, json=data)
+以下のテンプレでニュースをまとめてください。人間っぽく、具体的に。
+【ニュース要約】
+〜〜〜
 
-# AI要約付き投稿（擬似例）
-def post_summary(webhook, title, link):
-    # ここでAI要約処理を追加できます
-    summary = f"【ニュース要約】\n{title}\n\n【影響】\n影響の分析\n\n【チャンス】\nチャンスの分析\n\n【ひとこと解説】\n簡単解説"
-    data = {"content": f"{summary}\n{link}"}
-    requests.post(webhook, json=data)
+【影響】
+〜〜〜
 
-# ニュース取得と投稿
-def fetch_and_post(feeds, webhook, summary_webhook=None):
-    for url in feeds:
-        feed = feedparser.parse(url)
+【チャンス】
+〜〜〜
+
+【ひとこと解説】
+〜〜〜
+"""
+    response = openai.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7
+    )
+    return response.choices[0].message.content
+
+# Webhook送信
+async def send_webhook(url, content):
+    webhook = discord.Webhook.from_url(url, adapter=discord.AsyncWebhookAdapter(client.http.session))
+    await webhook.send(content)
+
+# ニュース取得・投稿
+async def fetch_and_post():
+    global daily_news
+    for category, feed_url in FEEDS.items():
+        feed = feedparser.parse(feed_url)
         for entry in feed.entries:
-            if entry.title not in posted_titles:
-                if is_post_time():
-                    post_to_discord(webhook, entry.title, entry.link)
-                    if summary_webhook:
-                        # 10〜30分後に要約投稿
-                        delay = random.randint(600, 1800)
-                        time.sleep(delay)
-                        post_summary(summary_webhook, entry.title, entry.link)
-                posted_titles.add(entry.title)
+            news_id = entry.id if 'id' in entry else entry.link
+            if news_id in posted_news:
+                continue
+            posted_news.add(news_id)
 
-# 22時振り返り投稿
-def daily_summary():
-    jst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
-    if jst.hour == 22 and jst.minute < 5:  # 22:00前後5分で一度だけ投稿
-        summary_text = f"【本日の振り返り】 {jst.strftime('%Y-%m-%d')}\n今日のIT・経済ニュースまとめと今後の対策案"
-        requests.post(SUMMARY_WEBHOOK, json={"content": summary_text})
+            title = entry.title
+            link = entry.link
+            # 元ニュース投稿
+            if category == "IT":
+                await send_webhook(WEBHOOK_IT, f"[{category}] 投稿: {title} ({link})")
+            else:
+                await send_webhook(WEBHOOK_BUSINESS, f"[{category}] 投稿: {title} ({link})")
 
-# =========================
+            # 要約投稿（10~30分ランダム）
+            await asyncio.sleep(random.randint(600, 1800))
+            summary = await generate_summary(title, link)
+            if category == "IT":
+                await send_webhook(SUMMARY_IT, summary)
+            else:
+                await send_webhook(SUMMARY_BUSINESS, summary)
+
+            # 22時振り返り用保存
+            daily_news.append((category, title, link))
+
+# 22時の振り返り投稿
+async def daily_summary():
+    while True:
+        now = now_jst()
+        if now.hour == 22 and now.minute == 0:
+            content = f"【今日の振り返り】{now.year}年{now.month}月{now.day}日\n\n"
+            for category, title, link in daily_news:
+                content += f"[{category}] {title} ({link})\n"
+            await send_webhook(SUMMARY_DAILY, content)
+            daily_news = []
+            await asyncio.sleep(60)  # 1分待機して次回をスキップ
+        else:
+            await asyncio.sleep(30)
+
 # メインループ
-# =========================
-while True:
-    try:
-        fetch_and_post(FEEDS_IT, WEBHOOK_IT, SUMMARY_WEBHOOK)
-        fetch_and_post(FEEDS_BUSINESS, WEBHOOK_BUSINESS, SUMMARY_WEBHOOK)
-        daily_summary()
-    except Exception as e:
-        print("エラー:", e)
-    time.sleep(60)  # 1分ごとにチェック
+@client.event
+async def on_ready():
+    print("ニュースBot起動")
+    while True:
+        now = now_jst()
+        # 6時〜22時のみニュース取得
+        if 6 <= now.hour < 22:
+            await fetch_and_post()
+        await asyncio.sleep(3600)  # 1時間ごとにチェック
+
+# 22時振り返りタスク起動
+client.loop.create_task(daily_summary())
+client.run("dummy")  # 通常はTOKEN不要、Webhookのみで送信
+
