@@ -1,4 +1,6 @@
 discord.py
-feedparser
+beautifulsoup4
 requests
 openai
+feedparser
+discord.py
