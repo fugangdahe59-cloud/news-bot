@@ -3,10 +3,10 @@ import feedparser
 import asyncio
 import datetime
 import discord
-import random
 import requests
 import openai
 from bs4 import BeautifulSoup
+import random
 
 # ===== 環境変数 =====
 WEBHOOK_IT = os.getenv("WEBHOOK_IT")
@@ -33,11 +33,10 @@ FEEDS = {
 def now_jst():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
 
-# ===== 起動クールダウン（5〜10分ランダム）=====
-START_TIME = now_jst()
+# 起動クールダウン（5〜10分）
 STARTUP_DELAY = random.randint(300, 600)
 
-# Webhook送信
+# ===== Webhook送信 =====
 def send_webhook(url, content):
     if not url:
         return
@@ -48,7 +47,7 @@ def send_webhook(url, content):
     except Exception as e:
         print("[ERROR]", e)
 
-# 記事本文取得
+# ===== 記事本文取得 =====
 def fetch_article_text(url):
     try:
         r = requests.get(url, timeout=10)
@@ -59,12 +58,11 @@ def fetch_article_text(url):
     except:
         return ""
 
-# AI要約
+# ===== AI要約 =====
 def generate_summary(entry):
     global ai_calls_this_hour, last_reset_hour
 
     now = now_jst()
-
     if now.hour != last_reset_hour:
         ai_calls_this_hour = 0
         last_reset_hour = now.hour
@@ -97,21 +95,19 @@ def generate_summary(entry):
 
         summary = lines[0]
         points = [l.replace("・", "").strip() for l in lines[1:4]]
-
         while len(points) < 3:
             points.append("")
 
         result = (summary, points)
         summary_cache[entry.link] = result
         ai_calls_this_hour += 1
-
         return result
 
     except Exception as e:
         print("[AI ERROR]", e)
         return "AI要約失敗", ["再試行予定", "", ""]
 
-# テンプレ
+# ===== 要約テンプレ =====
 def format_summary(summary, points, url):
     return (
         "🧠 要約\n\n"
@@ -123,71 +119,5 @@ def format_summary(summary, points, url):
         f"🔗 {url}"
     )
 
-# 投稿
-def post_news(category, entry):
-    url = WEBHOOK_IT if category == "IT" else WEBHOOK_BUSINESS
-    send_webhook(url, f"{category}トピック: {entry.title}\n{entry.link}")
-
-def post_summary(category, text):
-    url = WEBHOOK_IT_SUMMARY if category == "IT" else WEBHOOK_BUSINESS_SUMMARY
-    send_webhook(url, text)
-
-def post_daily_review(daily_news):
-    now = now_jst().strftime("%Y-%m-%d")
-    content = f"📝 1日の振り返り ({now})\n"
-    for cat, entries in daily_news.items():
-        content += f"\n--- {cat} ---\n"
-        for e in entries:
-            content += f"- {e.title}\n{e.link}\n"
-    send_webhook(WEBHOOK_DAILY_REVIEW, content)
-
-# 並列処理
-async def process_entry(category, entry):
-    post_news(category, entry)
-
-    elapsed = (now_jst() - START_TIME).total_seconds()
-    if elapsed < STARTUP_DELAY:
-        wait = STARTUP_DELAY - elapsed
-        print(f"[Startup Cooldown] あと{int(wait)}秒待機")
-        await asyncio.sleep(wait)
-
-    delay = random.randint(600, 1800)
-    print(f"[Queue Delay] {delay}秒待機")
-    await asyncio.sleep(delay)
-
-    summary, points = generate_summary(entry)
-    text = format_summary(summary, points, entry.link)
-    post_summary(category, text)
-
-# メイン
-async def main_loop():
-    daily_news = {"IT": [], "BUSINESS": []}
-    posted = set()
-
-    print("🔍 AIニュースBot起動")
-
-    while True:
-        now = now_jst()
-
-        if 6 <= now.hour < 22:
-            for cat, url in FEEDS.items():
-                feed = feedparser.parse(url)
-                for entry in feed.entries:
-                    if entry.link in posted:
-                        continue
-                    posted.add(entry.link)
-                    daily_news[cat].append(entry)
-                    asyncio.create_task(process_entry(cat, entry))
-
-        if now.hour >= 22 and any(daily_news.values()):
-            await asyncio.sleep(5)
-            post_daily_review(daily_news)
-            daily_news = {"IT": [], "BUSINESS": []}
-            posted.clear()
-            await asyncio.sleep(3600)
-        else:
-            await asyncio.sleep(600)
-
-# 実行
-if __name__ == "__main__":
-    asyncio.run(main_loop())
+# ===== ニュース投稿 =====
+def pos
