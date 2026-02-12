@@ -97,7 +97,7 @@ def generate_summary(entry):
         summary = lines[0]
         points = [l.replace("・", "").strip() for l in lines[1:4]]
 
-        while len(points) < 3:
+        while len(points) < 1:
             points.append("")
 
         result = (summary, points)
