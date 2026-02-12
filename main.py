@@ -1,46 +1,52 @@
-def generate_daily_summary(daily_news):
-    summary_lines = []
+import os
+import feedparser
+import asyncio
+import datetime
+import discord
+import random
+import requests
+import openai
+from bs4 import BeautifulSoup
 
-    # ITニュース総括
-    it_articles = daily_news.get("IT", [])
-    if it_articles:
-        it_titles = [a.title for a in it_articles]
-        summary_lines.append(
-            f"ITニュースは「{it_titles[0]}」などが中心"
-            + ("、その他話題も含む" if len(it_titles) > 1 else "")
-        )
+# ===== 環境変数 =====
+WEBHOOK_IT = os.getenv("WEBHOOK_IT")
+WEBHOOK_BUSINESS = os.getenv("WEBHOOK_BUSINESS")
+WEBHOOK_IT_SUMMARY = os.getenv("WEBHOOK_IT_SUMMARY")
+WEBHOOK_BUSINESS_SUMMARY = os.getenv("WEBHOOK_BUSINESS_SUMMARY")
+WEBHOOK_DAILY_REVIEW = os.getenv("WEBHOOK_DAILY_REVIEW")
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
-    # BUSINESSニュース総括
-    bus_articles = daily_news.get("BUSINESS", [])
-    if bus_articles:
-        bus_titles = [a.title for a in bus_articles]
-        summary_lines.append(
-            f"BUSINESSニュースは「{bus_titles[0]}」などが注目"
-            + ("、その他話題も含む" if len(bus_titles) > 1 else "")
-        )
+# ===== 制限 =====
+AI_LIMIT_PER_HOUR = 10
+ai_calls_this_hour = 0
+last_reset_hour = -1
 
-    # 全体総括
-    if it_articles or bus_articles:
-        summary_lines.append("全体として社会・経済両面で注目度の高いニュースが集まった日")
+summary_cache = {}
 
-    return "\n".join(summary_lines)
+# RSS
+FEEDS = {
+    "IT": "https://news.yahoo.co.jp/rss/topics/it.xml",
+    "BUSINESS": "https://news.yahoo.co.jp/rss/topics/business.xml"
+}
 
+# JST時間
+def now_jst():
+    return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
 
-def post_daily_review(daily_news):
-    now = now_jst().strftime("%Y-%m-%d")
-    content = f"📝 1日の振り返り ({now})\n\n"
+# Webhook送信
+def send_webhook(url, content):
+    if not url:
+        return
+    try:
+        webhook = discord.SyncWebhook.from_url(url)
+        webhook.send(content)
+        print("[OK] 投稿:", content[:80])
+    except Exception as e:
+        print("[ERROR]", e)
 
-    # 記事リスト
-    for cat in ["IT", "BUSINESS"]:
-        entries = daily_news.get(cat, [])
-        if entries:
-            content += f"【{cat}ニュース】\n"
-            for e in entries:
-                content += f"💡 {e.title}\n"
-                content += f"🔗 {e.link}\n\n"
-
-    # 自動生成総括（切り形）
-    content += "【総括】\n"
-    content += generate_daily_summary(daily_news)
-
-    send_webhook(WEBHOOK_DAILY_REVIEW, content)
+# 記事本文取得
+def fetch_article_text(url):
+    try:
+        r = requests.get(url, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+        p
