@@ -11,3 +11,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 @bot.command()
 async def ping(ctx):
     await ctx.send("pong")
+print("🚀 Bot起動開始")
+
+if __name__ == "__main__":
+    bot.run(TOKEN)
