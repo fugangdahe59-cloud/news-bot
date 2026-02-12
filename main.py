@@ -65,16 +65,13 @@ def generate_summary(entry):
 
     now = now_jst()
 
-    # 時間リセット
     if now.hour != last_reset_hour:
         ai_calls_this_hour = 0
         last_reset_hour = now.hour
 
-    # キャッシュ
     if entry.link in summary_cache:
         return summary_cache[entry.link]
 
-    # 制限超え
     if ai_calls_this_hour >= AI_LIMIT_PER_HOUR:
         return "要約制限中", ["次の時間に再開", "", ""]
 
@@ -92,8 +89,7 @@ def generate_summary(entry):
     try:
         response = openai.chat.completions.create(
             model="gpt-5-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3
+            messages=[{"role": "user", "content": prompt}]
         )
 
         text = response.choices[0].message.content.strip()
@@ -127,7 +123,7 @@ def format_summary(summary, points, url):
         f"🔗 {url}"
     )
 
-# 投稿系
+# 投稿
 def post_news(category, entry):
     url = WEBHOOK_IT if category == "IT" else WEBHOOK_BUSINESS
     send_webhook(url, f"{category}トピック: {entry.title}\n{entry.link}")
@@ -149,15 +145,15 @@ def post_daily_review(daily_news):
 async def process_entry(category, entry):
     post_news(category, entry)
 
-    # 起動直後クールダウン
     elapsed = (now_jst() - START_TIME).total_seconds()
     if elapsed < STARTUP_DELAY:
         wait = STARTUP_DELAY - elapsed
         print(f"[Startup Cooldown] あと{int(wait)}秒待機")
         await asyncio.sleep(wait)
 
-    # 通常ランダム遅延
-    await asyncio.sleep(random.randint(600, 1800))
+    delay = random.randint(600, 1800)
+    print(f"[Queue Delay] {delay}秒待機")
+    await asyncio.sleep(delay)
 
     summary, points = generate_summary(entry)
     text = format_summary(summary, points, entry.link)
