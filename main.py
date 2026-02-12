@@ -1,27 +1,63 @@
-import json
+import discord
+from discord.ext import tasks
+import os
 
-CONFIG_FILE = "config.json"
+TOKEN = os.getenv("DISCORD_TOKEN")
 
-def load_config():
+# ▼ ここに自分のチャンネルIDを入れる
+IT_CHANNEL_ID = 123456789012345678
+BUSINESS_CHANNEL_ID = 123456789012345678
+
+intents = discord.Intents.default()
+bot = discord.Client(intents=intents)
+
+
+async def safe_send(channel_id, message):
+    channel = bot.get_channel(channel_id)
+
+    if channel is None:
+        print(f"[ERROR] チャンネル取得失敗: {channel_id}")
+        return
+
     try:
-        with open(CONFIG_FILE, "r") as f:
-            return json.load(f)
-    except:
-        return {}
+        await channel.send(message)
+        print("[OK] 投稿成功")
+    except Exception as e:
+        print(f"[ERROR] 送信失敗: {e}")
 
-def save_config(data):
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(data, f)
 
-config = load_config()
+async def fetch_and_post(topic):
+    # ▼ 仮のニュース（ここにRSS処理を入れる）
+    title = "サンプルニュース"
+    url = "https://example.com"
 
-@bot.command()
-async def setit(ctx):
-    guild_id = str(ctx.guild.id)
-    if guild_id not in config:
-        config[guild_id] = {}
+    template = f"""{topic}トピック
+タイトル：{title}
+原文：{url}
+要約：
+解説："""
 
-    config[guild_id]["it"] = ctx.channel.id
-    save_config(config)
+    if topic == "IT":
+        await safe_send(IT_CHANNEL_ID, template)
 
-    await ctx.send("✅ ITニュースの投稿先を登録しました")
+    if topic == "BUSINESS":
+        await safe_send(BUSINESS_CHANNEL_ID, template)
+
+
+@tasks.loop(minutes=10)
+async def news_loop():
+    print("🔍 ニュース取得開始")
+
+    await fetch_and_post("IT")
+    await fetch_and_post("BUSINESS")
+
+    print("🔍 投稿完了")
+
+
+@bot.event
+async def on_ready():
+    print(f"✅ ログイン成功: {bot.user}")
+    news_loop.start()
+
+
+bot.run(TOKEN)
