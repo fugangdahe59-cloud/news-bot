@@ -120,4 +120,74 @@ def format_summary(summary, points, url):
     )
 
 # ===== ニュース投稿 =====
-def pos
+def post_news(category, entry):
+    url = WEBHOOK_IT if category == "IT" else WEBHOOK_BUSINESS
+    send_webhook(url, f"{category}トピック: {entry.title}\n{entry.link}")
+
+def post_summary(category, text):
+    url = WEBHOOK_IT_SUMMARY if category == "IT" else WEBHOOK_BUSINESS_SUMMARY
+    send_webhook(url, text)
+
+def post_daily_review(daily_news):
+    now = now_jst().strftime("%Y-%m-%d")
+    content = f"📝 1日の振り返り ({now})\n"
+    for cat, entries in daily_news.items():
+        content += f"\n--- {cat} ---\n"
+        for e in entries:
+            content += f"- {e.title}\n{e.link}\n"
+    send_webhook(WEBHOOK_DAILY_REVIEW, content)
+
+# ===== 要約キュー =====
+summary_queue = asyncio.Queue()
+
+# ニュース取得時にキューに追加
+async def process_entry(category, entry):
+    post_news(category, entry)
+    await summary_queue.put((category, entry))
+
+# キュー処理ワーカー
+async def summary_worker():
+    print("🧠 要約ワーカー起動")
+    # 起動後クールダウン
+    await asyncio.sleep(STARTUP_DELAY)
+    print(f"[Startup Cooldown終了] 要約開始")
+
+    while True:
+        category, entry = await summary_queue.get()
+        summary, points = generate_summary(entry)
+        text = format_summary(summary, points, entry.link)
+        post_summary(category, text)
+        summary_queue.task_done()
+        await asyncio.sleep(5)  # 投稿間隔5秒
+
+# ===== メインループ =====
+async def main_loop():
+    daily_news = {"IT": [], "BUSINESS": []}
+    posted = set()
+
+    print("🔍 AIニュースBot起動")
+    asyncio.create_task(summary_worker())
+
+    while True:
+        now = now_jst()
+        if 6 <= now.hour < 22:
+            for cat, url in FEEDS.items():
+                feed = feedparser.parse(url)
+                for entry in feed.entries:
+                    if entry.link in posted:
+                        continue
+                    posted.add(entry.link)
+                    daily_news[cat].append(entry)
+                    asyncio.create_task(process_entry(cat, entry))
+        if now.hour >= 22 and any(daily_news.values()):
+            await asyncio.sleep(5)
+            post_daily_review(daily_news)
+            daily_news = {"IT": [], "BUSINESS": []}
+            posted.clear()
+            await asyncio.sleep(3600)
+        else:
+            await asyncio.sleep(600)
+
+# ===== 実行 =====
+if __name__ == "__main__":
+    asyncio.run(main_loop())
