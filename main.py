@@ -33,6 +33,10 @@ FEEDS = {
 def now_jst():
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
 
+# ===== 起動クールダウン（5〜10分ランダム）=====
+START_TIME = now_jst()
+STARTUP_DELAY = random.randint(300, 600)
+
 # Webhook送信
 def send_webhook(url, content):
     if not url:
@@ -145,6 +149,14 @@ def post_daily_review(daily_news):
 async def process_entry(category, entry):
     post_news(category, entry)
 
+    # 起動直後クールダウン
+    elapsed = (now_jst() - START_TIME).total_seconds()
+    if elapsed < STARTUP_DELAY:
+        wait = STARTUP_DELAY - elapsed
+        print(f"[Startup Cooldown] あと{int(wait)}秒待機")
+        await asyncio.sleep(wait)
+
+    # 通常ランダム遅延
     await asyncio.sleep(random.randint(600, 1800))
 
     summary, points = generate_summary(entry)
