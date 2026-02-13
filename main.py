@@ -16,13 +16,12 @@ WEBHOOK_BUSINESS_SUMMARY = os.getenv("WEBHOOK_BUSINESS_SUMMARY")
 WEBHOOK_DAILY_REVIEW = os.getenv("WEBHOOK_DAILY_REVIEW")
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# ===== 制限 =====
+# ===== AI制限 =====
 AI_LIMIT_PER_HOUR = 10
 ai_calls_this_hour = 0
 last_reset_hour = -1
 
 summary_cache = {}
-queue = asyncio.Queue()
 
 # RSS
 FEEDS = {
@@ -70,15 +69,14 @@ def generate_summary(entry):
         return summary_cache[entry.link]
 
     if ai_calls_this_hour >= AI_LIMIT_PER_HOUR:
-        return ("要約制限中", ["次の時間に再開", "", ""])
+        return "要約失敗"
 
     article = fetch_article_text(entry.link)
     if not article:
-        return ("本文取得失敗", ["リンク参照", "", ""])
+        return "要約失敗"
 
     prompt = f"""
-ニュースを短く要約してください。
-3行以内＋ポイント3つ。
+次のニュースを3行以内で要約してください。
 
 {article}
 """
@@ -90,40 +88,28 @@ def generate_summary(entry):
         )
 
         text = response.choices[0].message.content.strip()
-        lines = text.split("\n")
-
-        summary = lines[0] if lines else "要約失敗"
-        points = [l.replace("・", "").strip() for l in lines[1:4]]
-
-        while len(points) < 3:
-            points.append("")
-
-        result = (summary, points)
-        summary_cache[entry.link] = result
+        summary_cache[entry.link] = text
         ai_calls_this_hour += 1
+        return text
 
-        return result
+    except:
+        return "要約失敗"
 
-    except Exception as e:
-        print("[AI ERROR]", e)
-        return ("AI要約失敗", ["再試行予定", "", ""])
-
-# 要約テンプレ
-def format_summary(category, entry, summary, points):
+# テンプレ
+def format_summary(category, entry, summary):
     text = (
         f"{category}トピック\n"
         f"タイトル：{entry.title}\n"
         f"原文：{entry.link}\n"
-        f"要約：{summary}\n"
-        f"解説：\n"
+        f"要約：{summary}"
     )
 
-    if summary in ["AI要約失敗", "本文取得失敗", "要約制限中"]:
-        text += "要約解説失敗"
+    if summary == "要約失敗":
+        text += "\n要約失敗"
 
     return text
 
-# 投稿系
+# 投稿
 def post_news(category, entry):
     url = WEBHOOK_IT if category == "IT" else WEBHOOK_BUSINESS
     send_webhook(url, f"{category}トピック: {entry.title}\n{entry.link}")
@@ -131,22 +117,6 @@ def post_news(category, entry):
 def post_summary(category, text):
     url = WEBHOOK_IT_SUMMARY if category == "IT" else WEBHOOK_BUSINESS_SUMMARY
     send_webhook(url, text)
-
-# ワーカー
-async def worker():
-    while True:
-        category, entry = await queue.get()
-        await process_entry(category, entry)
-        queue.task_done()
-
-# 記事処理
-async def process_entry(category, entry):
-    post_news(category, entry)
-    await asyncio.sleep(random.randint(600, 1800))
-
-    summary, points = generate_summary(entry)
-    text = format_summary(category, entry, summary, points)
-    post_summary(category, text)
 
 # 1日振り返り
 def post_daily_review(daily_news):
@@ -162,17 +132,23 @@ def post_daily_review(daily_news):
 
     send_webhook(WEBHOOK_DAILY_REVIEW, content)
 
-# メイン
+# 要約処理
+async def process_entry(category, entry):
+    post_news(category, entry)
+
+    await asyncio.sleep(random.randint(600, 1800))  # 10〜30分
+
+    summary = generate_summary(entry)
+    text = format_summary(category, entry, summary)
+    post_summary(category, text)
+
+# メインループ
 async def main_loop():
     daily_news = {"IT": [], "BUSINESS": []}
     posted = set()
 
     print("🔍 AIニュースBot起動")
     print("🧠 要約ワーカー起動")
-
-    # ワーカー起動（最大3並列）
-    for _ in range(3):
-        asyncio.create_task(worker())
 
     while True:
         now = now_jst()
@@ -185,10 +161,11 @@ async def main_loop():
                         continue
                     posted.add(entry.link)
                     daily_news[cat].append(entry)
-                    await queue.put((cat, entry))
+                    asyncio.create_task(process_entry(cat, entry))
 
+        # 22時以降 → 振り返り
         if now.hour >= 22 and any(daily_news.values()):
-            await queue.join()
+            await asyncio.sleep(5)
             post_daily_review(daily_news)
             daily_news = {"IT": [], "BUSINESS": []}
             posted.clear()
