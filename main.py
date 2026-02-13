@@ -60,17 +60,13 @@ def generate_summary(entry):
     global ai_calls_this_hour, last_reset_hour
 
     now = now_jst()
-
-    # 時間リセット
     if now.hour != last_reset_hour:
         ai_calls_this_hour = 0
         last_reset_hour = now.hour
 
-    # キャッシュ
     if entry.link in summary_cache:
         return summary_cache[entry.link]
 
-    # 制限超え
     if ai_calls_this_hour >= AI_LIMIT_PER_HOUR:
         return "要約制限中", ["次の時間に再開", "", ""]
 
@@ -94,24 +90,26 @@ def generate_summary(entry):
         text = response.choices[0].message.content.strip()
         lines = text.split("\n")
 
-        summary = lines[0]
+        summary = lines[0] if lines else "AI要約失敗"
         points = [l.replace("・", "").strip() for l in lines[1:4]]
 
-        while len(points) < 1:
+        # ポイントが3つ未満なら空文字で埋める
+        while len(points) < 3:
             points.append("")
 
         result = (summary, points)
         summary_cache[entry.link] = result
         ai_calls_this_hour += 1
-
         return result
 
     except Exception as e:
         print("[AI ERROR]", e)
         return "AI要約失敗", ["再試行予定", "", ""]
 
-# 投稿テンプレート
+# 投稿テンプレート（修正版）
 def format_summary(summary, points, url):
+    while len(points) < 3:
+        points.append("")
     return (
         "🧠 要約\n\n"
         f"{summary}\n\n"
@@ -134,9 +132,7 @@ def post_summary(category, text):
 # 総括自動生成
 def generate_daily_summary(daily_news):
     global ai_calls_this_hour, last_reset_hour
-
     now = now_jst()
-    # 時間リセット
     if now.hour != last_reset_hour:
         ai_calls_this_hour = 0
         last_reset_hour = now.hour
@@ -146,7 +142,6 @@ def generate_daily_summary(daily_news):
     for cat in ["IT", "BUSINESS"]:
         for entry in daily_news.get(cat, []):
             summary_text += f"{cat}: {entry.title}\n"
-
     prompt += summary_text
 
     try:
@@ -154,8 +149,7 @@ def generate_daily_summary(daily_news):
             model="gpt-5-mini",
             messages=[{"role": "user", "content": prompt}]
         )
-        text = response.choices[0].message.content.strip()
-        return text
+        return response.choices[0].message.content.strip()
     except Exception as e:
         print("[AI ERROR]", e)
         return "総括生成失敗"
@@ -164,8 +158,6 @@ def generate_daily_summary(daily_news):
 def post_daily_review(daily_news):
     now = now_jst().strftime("%Y-%m-%d")
     content = f"📝 1日の振り返り ({now})\n\n"
-
-    # 記事リスト
     for cat in ["IT", "BUSINESS"]:
         entries = daily_news.get(cat, [])
         if entries:
@@ -173,11 +165,8 @@ def post_daily_review(daily_news):
             for e in entries:
                 content += f"💡 {e.title}\n"
                 content += f"🔗 {e.link}\n\n"
-
-    # AI総括（切り形）
     content += "【総括】\n"
     content += generate_daily_summary(daily_news)
-
     send_webhook(WEBHOOK_DAILY_REVIEW, content)
 
 # 並列処理
@@ -198,7 +187,6 @@ async def main_loop():
 
     while True:
         now = now_jst()
-
         if 6 <= now.hour < 22:
             for cat, url in FEEDS.items():
                 feed = feedparser.parse(url)
@@ -209,7 +197,6 @@ async def main_loop():
                     daily_news[cat].append(entry)
                     asyncio.create_task(process_entry(cat, entry))
 
-        # 22時以降に1日振り返り投稿
         if now.hour >= 22 and any(daily_news.values()):
             await asyncio.sleep(5)
             post_daily_review(daily_news)
