@@ -60,6 +60,7 @@ def generate_summary(entry):
     global ai_calls_this_hour, last_reset_hour
 
     now = now_jst()
+
     if now.hour != last_reset_hour:
         ai_calls_this_hour = 0
         last_reset_hour = now.hour
@@ -75,7 +76,7 @@ def generate_summary(entry):
         return "本文取得失敗", ["リンク参照", "", ""]
 
     prompt = f"""
-ニュースを短く要約し、最後に「切り形」で1日の総括向けにまとめてください。
+ニュースを短く要約してください。
 3行以内＋ポイント3つ。
 
 {article}
@@ -88,28 +89,30 @@ def generate_summary(entry):
         )
 
         text = response.choices[0].message.content.strip()
-        lines = text.split("\n")
+        lines = [l for l in text.split("\n") if l.strip()]
 
-        summary = lines[0] if lines else "AI要約失敗"
-        points = [l.replace("・", "").strip() for l in lines[1:4]]
+        summary_lines = lines[:3]
+        while len(summary_lines) < 3:
+            summary_lines.append("")
 
-        # ポイントが3つ未満なら空文字で埋める
+        points = lines[3:6]
         while len(points) < 3:
             points.append("")
+
+        summary = "\n".join(summary_lines)
 
         result = (summary, points)
         summary_cache[entry.link] = result
         ai_calls_this_hour += 1
+
         return result
 
     except Exception as e:
         print("[AI ERROR]", e)
         return "AI要約失敗", ["再試行予定", "", ""]
 
-# 投稿テンプレート（修正版）
+# 投稿テンプレ
 def format_summary(summary, points, url):
-    while len(points) < 3:
-        points.append("")
     return (
         "🧠 要約\n\n"
         f"{summary}\n\n"
@@ -120,7 +123,7 @@ def format_summary(summary, points, url):
         f"🔗 {url}"
     )
 
-# 投稿系
+# 投稿
 def post_news(category, entry):
     url = WEBHOOK_IT if category == "IT" else WEBHOOK_BUSINESS
     send_webhook(url, f"{category}トピック: {entry.title}\n{entry.link}")
@@ -129,19 +132,15 @@ def post_summary(category, text):
     url = WEBHOOK_IT_SUMMARY if category == "IT" else WEBHOOK_BUSINESS_SUMMARY
     send_webhook(url, text)
 
-# 総括自動生成
+# 総括生成
 def generate_daily_summary(daily_news):
-    global ai_calls_this_hour, last_reset_hour
-    now = now_jst()
-    if now.hour != last_reset_hour:
-        ai_calls_this_hour = 0
-        last_reset_hour = now.hour
-
     summary_text = ""
-    prompt = "以下のニュースを読んで、1日の振り返り用に切り形で総括を作ってください。ITとBUSINESSそれぞれの特徴も含めてください。\n\n"
+    prompt = "以下のニュースを1日の総括としてまとめてください。\n\n"
+
     for cat in ["IT", "BUSINESS"]:
         for entry in daily_news.get(cat, []):
             summary_text += f"{cat}: {entry.title}\n"
+
     prompt += summary_text
 
     try:
@@ -154,30 +153,32 @@ def generate_daily_summary(daily_news):
         print("[AI ERROR]", e)
         return "総括生成失敗"
 
-# 1日振り返り投稿
+# 振り返り投稿
 def post_daily_review(daily_news):
     now = now_jst().strftime("%Y-%m-%d")
     content = f"📝 1日の振り返り ({now})\n\n"
+
     for cat in ["IT", "BUSINESS"]:
         entries = daily_news.get(cat, [])
         if entries:
             content += f"【{cat}ニュース】\n"
             for e in entries:
-                content += f"💡 {e.title}\n"
-                content += f"🔗 {e.link}\n\n"
+                content += f"💡 {e.title}\n🔗 {e.link}\n\n"
+
     content += "【総括】\n"
     content += generate_daily_summary(daily_news)
+
     send_webhook(WEBHOOK_DAILY_REVIEW, content)
 
 # 並列処理
 async def process_entry(category, entry):
     post_news(category, entry)
-    await asyncio.sleep(random.randint(600, 1800))
+    await asyncio.sleep(random.randint(10, 30))  # テスト用短縮
     summary, points = generate_summary(entry)
     text = format_summary(summary, points, entry.link)
     post_summary(category, text)
 
-# メイン
+# メインループ
 async def main_loop():
     daily_news = {"IT": [], "BUSINESS": []}
     posted = set()
@@ -187,22 +188,23 @@ async def main_loop():
 
     while True:
         now = now_jst()
-        if 6 <= now.hour < 22:
-            for cat, url in FEEDS.items():
-                feed = feedparser.parse(url)
-                for entry in feed.entries:
-                    if entry.link in posted:
-                        continue
-                    posted.add(entry.link)
-                    daily_news[cat].append(entry)
-                    asyncio.create_task(process_entry(cat, entry))
 
-        if now.hour >= 22 and any(daily_news.values()):
+        for cat, url in FEEDS.items():
+            feed = feedparser.parse(url)
+            for entry in feed.entries:
+                if entry.link in posted:
+                    continue
+                posted.add(entry.link)
+                daily_news[cat].append(entry)
+                asyncio.create_task(process_entry(cat, entry))
+
+        # ✅ テスト用：即振り返り投稿
+        if any(daily_news.values()):
             await asyncio.sleep(5)
             post_daily_review(daily_news)
             daily_news = {"IT": [], "BUSINESS": []}
             posted.clear()
-            await asyncio.sleep(3600)
+            await asyncio.sleep(600)
         else:
             await asyncio.sleep(600)
 
